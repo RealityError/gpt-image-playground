@@ -1,0 +1,25 @@
+.env
+__pycache__/
+*.pyc
+
+# Backend data directories
+backend/generated/*
+backend/jobs/*
+backend/logs/*
+backend/thumbnails/*
+backend/uploads/*
+backend/service.db
+backend/service.db-shm
+backend/service.db-wal
+!backend/generated/.gitkeep
+!backend/jobs/.gitkeep
+!backend/logs/.gitkeep
+!backend/thumbnails/.gitkeep
+!backend/uploads/.gitkeep
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
+# Claude Code
+.claude/
