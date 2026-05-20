@@ -24,6 +24,23 @@ const PARAM_LABELS: Record<string, string> = {
   model: '模型',
 }
 
+const USAGE_LABELS: Record<string, string> = {
+  total_tokens: '总量',
+  input_tokens: '输入',
+  output_tokens: '输出',
+  prompt_tokens: '提示词',
+  completion_tokens: '补全',
+  image_tokens: '图片',
+  text_tokens: '文本',
+  cached_tokens: '缓存',
+  reasoning_tokens: '推理',
+  requests: '请求',
+  input_tokens_details: '输入明细',
+  output_tokens_details: '输出明细',
+  prompt_tokens_details: '提示词明细',
+  completion_tokens_details: '补全明细',
+}
+
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value))
 }
@@ -53,6 +70,53 @@ function getInfoEntries(params?: ActualTaskParams | Record<string, unknown>) {
       value: formatInfoValue(key, value),
     }))
     .filter((entry) => entry.value.length > 0)
+}
+
+function formatUsageLabel(path: string[]) {
+  const labels = path.map((part) => USAGE_LABELS[part] ?? part)
+  return labels.length > 1 ? labels.join(' / ') : labels[0]
+}
+
+function flattenUsageEntries(value: unknown, path: string[] = []): ReturnType<typeof getInfoEntries> {
+  if (!isPlainRecord(value)) {
+    const formatted = formatInfoValue(path[path.length - 1] || 'usage', value)
+    return formatted ? [{ key: path.join('.'), label: formatUsageLabel(path), value: formatted }] : []
+  }
+
+  const preferredOrder = [
+    'total_tokens',
+    'input_tokens',
+    'output_tokens',
+    'prompt_tokens',
+    'completion_tokens',
+    'image_tokens',
+    'text_tokens',
+    'cached_tokens',
+    'reasoning_tokens',
+    'requests',
+    'input_tokens_details',
+    'output_tokens_details',
+    'prompt_tokens_details',
+    'completion_tokens_details',
+  ]
+  const orderedKeys = [
+    ...preferredOrder.filter((key) => Object.prototype.hasOwnProperty.call(value, key)),
+    ...Object.keys(value).filter((key) => !preferredOrder.includes(key)),
+  ]
+
+  return orderedKeys.flatMap((key) => {
+    const nextValue = value[key]
+    if (nextValue === undefined || nextValue === null || nextValue === '') return []
+    return flattenUsageEntries(nextValue, [...path, key])
+  })
+}
+
+function getUsageEntries(params?: ActualTaskParams | Record<string, unknown>) {
+  if (!params || !isPlainRecord(params)) return []
+  return flattenUsageEntries(params.usage, ['usage']).map((entry) => ({
+    ...entry,
+    label: entry.label.startsWith('usage / ') ? entry.label.slice('usage / '.length) : entry.label,
+  }))
 }
 
 export default function DetailModal() {
@@ -255,8 +319,10 @@ export default function DetailModal() {
     : undefined
   const jobId = task.serverJobId || task.id
   const requestParamEntries = getInfoEntries(task.params as unknown as Record<string, unknown>)
-  const actualParamEntries = getInfoEntries(currentActualParams)
+  const actualParamEntries = getInfoEntries(currentActualParams).filter((entry) => entry.key !== 'usage')
+  const usageEntries = getUsageEntries(currentActualParams)
   const hasActualParams = actualParamEntries.length > 0
+  const hasUsage = usageEntries.length > 0
   const rawResponseText = task.rawResponsePayload || JSON.stringify({
     jobId,
     operation: operationKind,
@@ -766,11 +832,12 @@ export default function DetailModal() {
                   <span className="font-mono text-gray-600 dark:text-gray-300">{actualCurrentSize}</span>
                 ))}
                 {renderInfoRow('请求参数', renderParamChips(requestParamEntries))}
-                {renderInfoRow('API响应', hasActualParams ? (
+                {(hasActualParams || !hasUsage) && renderInfoRow('API响应', hasActualParams ? (
                   renderParamChips(actualParamEntries)
                 ) : (
                   <span className="text-gray-400 dark:text-gray-500">旧记录未保存 API 实际响应参数</span>
                 ))}
+                {hasUsage && renderInfoRow('用量', renderParamChips(usageEntries))}
                 {currentRevisedPrompt && renderInfoRow('改写提示', (
                   <span className="line-clamp-3 whitespace-pre-wrap leading-5 text-gray-600 dark:text-gray-300">
                     {currentRevisedPrompt}

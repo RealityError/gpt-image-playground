@@ -141,6 +141,70 @@ def get_model_name() -> str:
     return get_env("IMAGE_MODEL", "gpt-image-2") or "gpt-image-2"
 
 
+def is_nowcoding_base_url() -> bool:
+    base_url = (get_env("IMAGE_API_BASE_URL", "") or "").lower()
+    return "nowcoding.ai" in base_url
+
+
+def get_default_response_format() -> str | None:
+    configured = clean_text(get_env("IMAGE_RESPONSE_FORMAT"))
+    if configured:
+        return configured
+    if is_nowcoding_base_url():
+        return "b64_json"
+    return None
+
+
+def get_upstream_quality_field() -> str:
+    configured = clean_text(get_env("IMAGE_QUALITY_FIELD"))
+    if configured:
+        return configured
+    if is_nowcoding_base_url():
+        return "thinking"
+    return "quality"
+
+
+def map_upstream_quality(value: str, field_name: str) -> str | None:
+    normalized = value.strip().lower()
+    if field_name == "thinking":
+        if normalized == "auto":
+            return None
+        return {
+            "high": "hd",
+            "hd": "hd",
+            "medium": "medium",
+            "standard": "standard",
+            "low": "low",
+        }.get(normalized, value)
+    return value
+
+
+def build_upstream_image_params(request_params: dict[str, Any]) -> dict[str, Any]:
+    call_params = dict(request_params)
+    extra_body = call_params.get("extra_body")
+    if isinstance(extra_body, dict):
+        next_extra_body = dict(extra_body)
+    else:
+        next_extra_body = {}
+    call_params.pop("extra_body", None)
+
+    quality_field = get_upstream_quality_field()
+    explicit_thinking = clean_text(call_params.pop("thinking", None))
+    quality_value = clean_text(call_params.get("quality"))
+
+    if quality_field != "quality":
+        call_params.pop("quality", None)
+        upstream_quality = explicit_thinking or (map_upstream_quality(quality_value, quality_field) if quality_value else None)
+        if upstream_quality:
+            next_extra_body[quality_field] = upstream_quality
+    elif explicit_thinking:
+        next_extra_body["thinking"] = explicit_thinking
+
+    if next_extra_body:
+        call_params["extra_body"] = next_extra_body
+    return call_params
+
+
 def get_min_passphrase_length() -> int:
     val = get_runtime_config("min_web_passphrase_length", "")
     if val:
@@ -173,6 +237,7 @@ class GenerateRequest(BaseModel):
     size: str | None = None
     aspect_ratio: str | None = None
     quality: str | None = None
+    thinking: str | None = None
     output_format: str | None = None
     output_compression: int | None = Field(default=None, ge=0, le=100)
     background: str | None = None
@@ -1162,6 +1227,15 @@ def build_generate_params(payload: GenerateRequest) -> tuple[str, dict[str, Any]
     optional_values = {
         "n": payload.n,
         "quality": clean_text(payload.quality),
+        "thinking": clean_text(payload.thinking),
+        "background": clean_text(payload.background),
+        "output_format": clean_text(payload.output_format),
+        "output_compression": payload.output_compression,
+        "partial_images": payload.partial_images,
+        "response_format": clean_text(payload.response_format) or get_default_response_format(),
+        "moderation": clean_text(payload.moderation),
+        "style": clean_text(payload.style),
+        "user": clean_text(payload.user),
     }
 
     for key, value in optional_values.items():
@@ -1199,6 +1273,13 @@ def parse_edit_form(form: FormData) -> tuple[str, dict[str, Any], list[Starlette
     optional_values: dict[str, Any] = {
         "n": parse_optional_int(form.get("n"), "n", 1, 8),
         "quality": clean_text(form.get("quality")),
+        "thinking": clean_text(form.get("thinking")),
+        "background": clean_text(form.get("background")),
+        "output_format": clean_text(form.get("output_format")),
+        "output_compression": parse_optional_int(form.get("output_compression"), "output_compression", 0, 100),
+        "partial_images": parse_optional_int(form.get("partial_images"), "partial_images", 0, 8),
+        "response_format": clean_text(form.get("response_format")) or get_default_response_format(),
+        "user": clean_text(form.get("user")),
     }
 
     for key, value in optional_values.items():
@@ -1284,7 +1365,7 @@ def create_job(
             for image_path in image_paths:
                 open_handles.append(image_path.open("rb"))
 
-            call_params = dict(request_params)
+            call_params = build_upstream_image_params(request_params)
             if len(open_handles) == 1:
                 call_params["image"] = open_handles[0]
             else:
@@ -1306,7 +1387,7 @@ def create_job(
 
             persist_input_images(job_id, image_paths, mask_path, created_at)
         else:
-            response = client.images.generate(**request_params)
+            response = client.images.generate(**build_upstream_image_params(request_params))
     except Exception as exc:
         elapsed = round(time.time() - started_at, 2)
         log_generation_failed(
@@ -1505,8 +1586,8 @@ def api_catalog_payload() -> dict[str, Any]:
             "edit_images_field": "image or image[]",
         },
         "parameters": {
-            "supported": ["prompt", "n", "size", "aspect_ratio", "quality", "image", "mask"],
-            "forwarded_upstream": ["model", "prompt", "n", "size", "quality", "image", "mask"],
+            "supported": ["prompt", "n", "size", "aspect_ratio", "quality", "thinking", "response_format", "image", "mask"],
+            "forwarded_upstream": ["model", "prompt", "n", "size", "quality", "thinking", "response_format", "image", "mask"],
             "sizes": ["auto", "1024x1024", "1536x1024", "1024x1536", "2048x1152", "1152x2048", "2048x2048", "3840x2160", "2160x3840"],
             "size_constraints": {
                 "format": "WIDTHxHEIGHT",
@@ -1516,7 +1597,7 @@ def api_catalog_payload() -> dict[str, Any]:
                 "max_aspect_ratio": "3:1",
             },
             "aspect_ratios": ASPECT_RATIO_SIZE_MAP,
-            "quality": ["auto", "low", "medium", "high"],
+            "quality": ["auto", "low", "medium", "high", "standard", "hd"],
         },
         "endpoints": [
             {
@@ -1524,14 +1605,14 @@ def api_catalog_payload() -> dict[str, Any]:
                 "path": "/api/v1/generate",
                 "content_type": "application/json",
                 "description": "Text-to-image generation.",
-                "body": {"prompt": "string", "size": "1024x1024", "quality": "auto"},
+                "body": {"prompt": "string", "size": "1024x1024", "quality": "auto", "response_format": "b64_json"},
             },
             {
                 "method": "POST",
                 "path": "/api/v1/edit",
                 "content_type": "multipart/form-data",
                 "description": "Image editing with one or more ordered input images.",
-                "fields": {"prompt": "string", "image": "file[]", "mask": "file optional", "size": "optional", "quality": "optional"},
+                "fields": {"prompt": "string", "image": "file[]", "mask": "file optional", "size": "optional", "quality": "optional", "thinking": "optional"},
             },
             {"method": "GET", "path": "/api/v1/images/{job_id}/{image_index}", "description": "Fetch generated image with API token."},
             {"method": "GET", "path": "/api/v1/thumbs/{job_id}/{image_index}", "description": "Fetch generated thumbnail with API token."},

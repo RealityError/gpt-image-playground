@@ -21,7 +21,7 @@ import { getSafeBoundingClientRect } from '../lib/domRect'
 import SizePickerModal from './SizePickerModal'
 import ViewportTooltip from './ViewportTooltip'
 
-type TaskQuality = 'auto' | 'low' | 'medium' | 'high'
+type TaskQuality = 'auto' | 'low' | 'medium' | 'high' | 'standard' | 'hd'
 
 // ============================================================================
 // contentEditable 光标/选区辅助函数
@@ -277,11 +277,13 @@ const SIZE_PRESETS: { label: string; value: string }[] = [
   { label: '2160×3840', value: '2160x3840' },
 ]
 
-const QUALITY_OPTIONS: { label: string; value: 'auto' | 'low' | 'medium' | 'high' }[] = [
-  { label: 'auto', value: 'auto' },
-  { label: 'low', value: 'low' },
-  { label: 'medium', value: 'medium' },
-  { label: 'high', value: 'high' },
+const QUALITY_OPTIONS: { label: string; value: TaskQuality; hint: string }[] = [
+  { label: '智能', value: 'auto', hint: 'auto' },
+  { label: '快速', value: 'low', hint: 'low' },
+  { label: '均衡', value: 'medium', hint: 'medium' },
+  { label: '高质', value: 'high', hint: 'high' },
+  { label: '标准', value: 'standard', hint: 'standard' },
+  { label: '高清', value: 'hd', hint: 'hd' },
 ]
 
 function useIsMobile() {
@@ -1242,20 +1244,6 @@ export default function InputBar() {
         onTouchMove={handleTouchMove}
         onTouchEnd={handleTouchEnd}
         onTouchCancel={handleTouchCancel}
-        onContextMenu={(e) => {
-          e.preventDefault()
-          const el = textareaRef.current
-          const cursor = el ? getContentEditableCursor(el) : prompt.length
-          const next = insertImageMentionAtVisibleRange(prompt, cursor, cursor, idx)
-          isUserInputRef.current = false
-          setPrompt(next.prompt)
-          window.setTimeout(() => {
-            if (textareaRef.current) {
-              textareaRef.current.focus()
-              setContentEditableCursor(textareaRef.current, next.cursor)
-            }
-          }, 0)
-        }}
       >
         <ButtonTooltip
           visible={imageHintId === img.id && Boolean(imageHintText) && (!isMobile || isMaskTarget)}
@@ -1412,23 +1400,28 @@ export default function InputBar() {
           </svg>
         </button>
         {qualityMenuOpen && (
-          <div className="absolute bottom-full left-0 z-50 mb-1 w-36 overflow-hidden rounded-2xl border border-gray-200/70 bg-white/95 p-1 shadow-xl ring-1 ring-black/5 backdrop-blur-xl dark:border-white/[0.08] dark:bg-gray-900/95 dark:ring-white/10">
+          <div className="absolute bottom-full left-0 z-50 mb-1 w-44 overflow-hidden rounded-2xl border border-gray-200/70 bg-white/95 p-1 shadow-xl ring-1 ring-black/5 backdrop-blur-xl dark:border-white/[0.08] dark:bg-gray-900/95 dark:ring-white/10">
             <div className="max-h-64 overflow-y-auto custom-scrollbar">
               {QUALITY_OPTIONS.map((opt) => (
                 <button
                   key={opt.value}
                   type="button"
                   onClick={() => {
-                    setParams({ quality: opt.value as TaskQuality })
+                    setParams({ quality: opt.value })
                     setQualityMenuOpen(false)
                   }}
-                  className={`flex w-full items-center rounded-xl px-2.5 py-1.5 text-left text-xs transition-colors ${
+                  className={`flex w-full items-center justify-between gap-3 rounded-xl px-2.5 py-1.5 text-left text-xs transition-colors ${
                     params.quality === opt.value
                       ? 'bg-blue-50 text-blue-600 dark:bg-blue-500/10 dark:text-blue-300'
                       : 'text-gray-700 hover:bg-gray-50 dark:text-gray-300 dark:hover:bg-white/[0.06]'
                   }`}
                 >
-                  {opt.label}
+                  <span className="font-medium">{opt.label}</span>
+                  <span className={`font-mono text-[10px] ${
+                    params.quality === opt.value ? 'text-blue-400 dark:text-blue-300/80' : 'text-gray-400 dark:text-gray-500'
+                  }`}>
+                    {opt.hint}
+                  </span>
                 </button>
               ))}
             </div>

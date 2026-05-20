@@ -72,9 +72,32 @@ Supported fields:
 - `n`: optional, `1` to `8`.
 - `size`: optional. Use `auto` or `WIDTHxHEIGHT`. Width and height must be multiples of 16, the longest edge can be up to `3840`, aspect ratio must not exceed `3:1`, and total pixels are capped at 4K level. Common values: `1024x1024`, `1536x1024`, `1024x1536`, `2048x2048`, `2048x1152`, `1152x2048`, `3840x2160`, `2160x3840`.
 - `aspect_ratio`: optional alternative to `size`. Supported values: `auto`, `1:1`, `3:2`, `2:3`, `16:9`, `9:16`.
-- `quality`: optional, forwarded as-is to the upstream API.
+- `quality`: optional. Supported values: `auto`, `low`, `medium`, `high`, `standard`, `hd`.
+- `thinking`: optional upstream compatibility field. If provided, it takes precedence over `quality` when the upstream quality field is configured as `thinking`.
+- `response_format`: optional, `url` or `b64_json`.
 
-Other advanced fields are accepted by the request model for compatibility but are not forwarded upstream.
+Advanced fields such as `background`, `output_format`, `output_compression`, `partial_images`, `moderation`, `style`, and `user` are forwarded when present.
+
+### NowCoding compatibility
+
+When `IMAGE_API_BASE_URL=https://nowcoding.ai/v1`, the service keeps the same OpenAI SDK image routes and only adapts request fields for NowCoding:
+
+- Generate: `POST /images/generations`
+- Edit/reference: `POST /images/edits`
+- No route rewrite is required for NowCoding; point `IMAGE_API_BASE_URL` at `https://nowcoding.ai/v1`
+- Default `response_format` becomes `b64_json`
+- `quality` is converted to `extra_body.thinking` before calling the upstream API
+
+Default quality mapping:
+
+| Local `quality` | NowCoding `thinking` |
+| --- | --- |
+| `auto` | omitted |
+| `low` | `low` |
+| `medium` | `medium` |
+| `high` | `hd` |
+| `standard` | `standard` |
+| `hd` | `hd` |
 
 ## Edit
 
@@ -97,6 +120,8 @@ Optional form fields:
 - `size`
 - `aspect_ratio`
 - `quality`
+- `thinking`
+- `response_format`
 
 Image order is preserved. The first uploaded `image` is passed as image 1, the second as image 2, and so on.
 

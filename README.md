@@ -30,6 +30,7 @@ gpt-image-playground/
 │   └── dist/         # 构建产物（被后端静态服务）
 ├── .env.example
 ├── API.md
+├── start.bat        # Windows 一键启动脚本
 └── README.md
 ```
 
@@ -43,6 +44,14 @@ gpt-image-playground/
 - 本地图片存储 + 缩略图
 
 ## 快速开始
+
+Windows 一键启动：
+
+```bat
+start.bat
+```
+
+脚本会检查依赖、构建前端，并在当前终端启动后端。如果端口已被占用，会询问是否关闭旧进程。
 
 ```bash
 cp .env.example .env
@@ -76,11 +85,30 @@ IMAGE_API_KEY=your-api-key
 IMAGE_API_BASE_URL=https://api.openai.com/v1
 IMAGE_MODEL=gpt-image-2
 IMAGE_API_TIMEOUT=360
+IMAGE_RESPONSE_FORMAT=
+IMAGE_QUALITY_FIELD=
 PORT=30116
 OWNER_SECRET=replace-with-a-long-secret
 COOKIE_SIGNING_SECRET=replace-with-another-long-secret
 ADMIN_PASSWORD=replace-with-admin-password
 ADMIN_PAGE_PATH=/admin
+```
+
+### NowCoding 适配
+
+当 `IMAGE_API_BASE_URL` 指向 `https://nowcoding.ai/v1` 时，服务会自动进行兼容处理：
+
+- 生图接口和 OpenAI SDK 一样走 `/images/generations`
+- 编辑/参考图接口和 OpenAI SDK 一样走 `/images/edits`
+- 不需要为 NowCoding 单独改接口路径，只需要把 `IMAGE_API_BASE_URL` 改成 `https://nowcoding.ai/v1`
+- 默认补充 `response_format=b64_json`
+- 将前端的质量选项转换为 NowCoding 使用的 `thinking` 字段，例如 `quality=high` 会转为 `thinking=hd`
+
+如需手动指定兼容字段，可通过环境变量覆盖：
+
+```env
+IMAGE_RESPONSE_FORMAT=b64_json
+IMAGE_QUALITY_FIELD=thinking
 ```
 
 ## API

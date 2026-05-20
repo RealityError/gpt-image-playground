@@ -42,25 +42,18 @@ export async function copyImageSourceToClipboard(src: string, fallbackUrl?: stri
     return !!url && copyTextWithExecCommand(url)
   }
 
+  const pngBlobPromise = fetchImageSourceAsPngBlob(src)
+
   if (!canUseAsyncImageClipboard) {
     if (!shouldSkipRichImageFallback && copyImageElementWithExecCommandNow(src)) return 'rich-image'
-    if (copyFallbackUrlWithExecCommand()) return 'url'
-
-    try {
-      if (!shouldSkipRichImageFallback && await copyImageElementWithExecCommand(src)) return 'rich-image'
-    } catch (err) {
-      clipboardError = err
-    }
-
     if (copyFallbackUrlWithExecCommand()) return 'url'
     throw clipboardError ?? new Error('Clipboard image API is not available')
   }
 
-  const pngBlobPromise = fetchImageSourceAsPngBlob(src)
   if (canUseAsyncImageClipboard) {
     try {
       await navigator.clipboard.write([
-        new ClipboardItem({ 'image/png': pngBlobPromise } as Record<string, Blob | Promise<Blob>>),
+        new ClipboardItem(buildClipboardItemData(pngBlobPromise, fallbackUrl || src)),
       ])
       return 'image'
     } catch (err) {
@@ -92,6 +85,27 @@ export async function copyImageSourceToClipboard(src: string, fallbackUrl?: stri
   if (await copyFallbackUrl()) return 'url'
 
   throw clipboardError ?? new Error('Clipboard image API is not available')
+}
+
+function buildClipboardItemData(pngBlobPromise: Promise<Blob>, sourceUrl: string): Record<string, Blob | Promise<Blob>> {
+  const itemData: Record<string, Blob | Promise<Blob>> = {
+    'image/png': pngBlobPromise,
+  }
+  const absoluteUrl = toAbsoluteHttpUrl(sourceUrl)
+  if (absoluteUrl) {
+    const escapedUrl = escapeHtmlAttribute(absoluteUrl)
+    itemData['text/html'] = new Blob([`<img src="${escapedUrl}">`], { type: 'text/html' })
+    itemData['text/plain'] = new Blob([absoluteUrl], { type: 'text/plain' })
+  }
+  return itemData
+}
+
+function escapeHtmlAttribute(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
 }
 
 function toAbsoluteHttpUrl(url: string): string | null {
