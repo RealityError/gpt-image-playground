@@ -9,7 +9,7 @@ export default function Header() {
   return (
     <>
       <header data-no-drag-select className="safe-area-top fixed top-0 left-0 right-0 z-40 bg-white/80 dark:bg-gray-950/80 backdrop-blur border-b border-gray-200 dark:border-white/[0.08]">
-        <div className="safe-area-x safe-header-inner max-w-7xl mx-auto flex items-center justify-between">
+        <div className="safe-area-x safe-header-inner max-w-[1560px] mx-auto flex items-center justify-between">
           <div className="flex-1 min-w-0 pr-2">
             <h1 className="inline-flex items-start relative">
               <span className="text-[17px] sm:text-lg font-bold tracking-tight text-gray-800 dark:text-gray-100">

@@ -190,20 +190,20 @@ export default function App() {
       )}
       <Header />
       {unlocked && (
-        <div data-no-drag-select className="safe-area-x max-w-7xl mx-auto mt-3 flex flex-wrap items-center justify-between gap-3 text-xs text-gray-500 dark:text-gray-400">
-          <div className="flex flex-wrap items-center gap-2">
-            <span>空间 {ownerHint}</span>
-            <span className="rounded-lg bg-gray-100 px-2 py-1 dark:bg-gray-900">在线空间 {serverStats.activeSpaces}</span>
-            <span className="rounded-lg bg-gray-100 px-2 py-1 dark:bg-gray-900">服务器生成中 {serverStats.activeGenerations}</span>
-            <span className="rounded-lg bg-gray-100 px-2 py-1 dark:bg-gray-900">我的生成 {serverStats.ownerActiveGenerations}/{serverStats.userConcurrencyLimit}</span>
+        <div data-no-drag-select className="safe-area-x max-w-[1560px] mx-auto mt-4 flex flex-wrap items-center justify-between gap-3 text-xs text-gray-500 dark:text-gray-400">
+          <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-gray-200/70 bg-white/60 px-3 py-2 dark:border-white/[0.08] dark:bg-white/[0.03]">
+            <span className="font-medium text-gray-600 dark:text-gray-300">空间 {ownerHint}</span>
+            <span className="rounded-lg bg-gray-100 px-2 py-1 dark:bg-white/[0.05]">在线 {serverStats.activeSpaces}</span>
+            <span className="rounded-lg bg-gray-100 px-2 py-1 dark:bg-white/[0.05]">队列 {serverStats.activeGenerations}</span>
+            <span className="rounded-lg bg-gray-100 px-2 py-1 dark:bg-white/[0.05]">我的 {serverStats.ownerActiveGenerations}/{serverStats.userConcurrencyLimit}</span>
           </div>
-          <button onClick={() => void lock()} className="px-3 py-1.5 rounded-lg border border-gray-200 dark:border-white/10 hover:bg-gray-100 dark:hover:bg-gray-900">
+          <button onClick={() => void lock()} className="px-3 py-1.5 rounded-lg border border-gray-200/70 bg-white/50 dark:border-white/10 dark:bg-white/[0.03] hover:bg-gray-100 dark:hover:bg-white/[0.06]">
             退出空间
           </button>
         </div>
       )}
-      <main data-home-main data-drag-select-surface className="pb-48">
-        <div className="safe-area-x max-w-7xl mx-auto">
+      <main data-home-main data-drag-select-surface className="pb-44 sm:pb-52">
+        <div className="safe-area-x max-w-[1560px] mx-auto">
           <SearchBar />
           <TaskGrid />
         </div>

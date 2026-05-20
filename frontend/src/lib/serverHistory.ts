@@ -1,4 +1,4 @@
-import type { TaskRecord } from '../types'
+import type { ActualTaskParams, TaskRecord } from '../types'
 import { DEFAULT_PARAMS } from '../types'
 import { deleteTask as dbDeleteTask, putTask } from './db'
 
@@ -8,12 +8,17 @@ interface ServerHistoryItem {
   image_id?: string
   job_id?: string
   created_at?: string
+  completed_at?: string
   operation?: string
   url?: string
   thumbnail_url?: string
   filename?: string
   size_bytes?: number
+  width?: number
+  height?: number
   prompt?: string
+  request_params?: Partial<TaskRecord['params']>
+  actual_params?: ActualTaskParams
   elapsed_seconds?: number
   input_image_count?: number
   input_image_urls?: string[]
@@ -27,6 +32,7 @@ interface ServerHistoryJob {
   prompt?: string
   model?: string
   request_params?: Partial<TaskRecord['params']>
+  actual_params?: ActualTaskParams
   status?: string
 }
 
@@ -50,6 +56,16 @@ function parseTime(value: unknown) {
   return Number.isFinite(time) ? time : Date.now()
 }
 
+function parseOptionalTime(value: unknown) {
+  if (typeof value !== 'string' || !value) return null
+  const time = Date.parse(value)
+  return Number.isFinite(time) ? time : null
+}
+
+function hasParams(value: unknown): value is ActualTaskParams {
+  return Boolean(value && typeof value === 'object' && Object.keys(value).length > 0)
+}
+
 function historyItemToTask(item: ServerHistoryItem): TaskRecord | null {
   const jobId = item.job_id || ''
   const imageIndexMatch = String(item.url || '').match(/\/(\d+)$/)
@@ -58,10 +74,18 @@ function historyItemToTask(item: ServerHistoryItem): TaskRecord | null {
   const url = item.url
   if (!url || !jobId) return null
   const createdAt = parseTime(item.created_at)
+  const requestParams = hasParams(item.request_params) ? item.request_params : undefined
+  const actualParams = hasParams(item.actual_params) ? item.actual_params : undefined
+  const operation = item.operation === 'edit' && !item.mask_url ? 'reference' : item.operation
 
   const inputImageIds: string[] = []
   const serverImageUrls: Record<string, string> = { [imageId]: url }
   const serverThumbnailUrls: Record<string, string> = item.thumbnail_url ? { [imageId]: item.thumbnail_url } : {}
+  const width = Number(item.width)
+  const height = Number(item.height)
+  const imageDimensions = Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0
+    ? { [imageId]: { width, height } }
+    : undefined
 
   if (item.input_image_urls && item.input_image_urls.length > 0) {
     for (let i = 0; i < item.input_image_urls.length; i++) {
@@ -82,7 +106,11 @@ function historyItemToTask(item: ServerHistoryItem): TaskRecord | null {
   return {
     id: jobId,
     prompt: item.prompt || '',
-    params: { ...DEFAULT_PARAMS },
+    params: { ...DEFAULT_PARAMS, ...(requestParams || {}) },
+    actualParams,
+    actualParamsByImage: actualParams ? { [imageId]: actualParams } : undefined,
+    outputImageDimensions: imageDimensions,
+    operation,
     inputImageIds,
     maskImageId,
     maskTargetImageId,
@@ -90,10 +118,11 @@ function historyItemToTask(item: ServerHistoryItem): TaskRecord | null {
     serverJobId: jobId,
     serverImageUrls,
     serverThumbnailUrls: Object.keys(serverThumbnailUrls).length ? serverThumbnailUrls : undefined,
+    rawImageUrls: [url],
     status: 'done',
     error: null,
     createdAt,
-    finishedAt: createdAt,
+    finishedAt: parseOptionalTime(item.completed_at) ?? createdAt,
     elapsed: typeof item.elapsed_seconds === 'number' ? Math.round(item.elapsed_seconds * 1000) : null,
   }
 }
@@ -101,10 +130,14 @@ function historyItemToTask(item: ServerHistoryItem): TaskRecord | null {
 function historyJobToTask(job: ServerHistoryJob): TaskRecord | null {
   const jobId = job.job_id || ''
   if (!jobId || job.status !== 'running') return null
+  const requestParams = hasParams(job.request_params) ? job.request_params : undefined
+  const actualParams = hasParams(job.actual_params) ? job.actual_params : undefined
   return {
     id: jobId,
     prompt: job.prompt || '',
-    params: { ...DEFAULT_PARAMS, ...(job.request_params || {}) },
+    params: { ...DEFAULT_PARAMS, ...(requestParams || {}) },
+    actualParams,
+    operation: job.operation,
     inputImageIds: [],
     outputImages: [],
     serverJobId: jobId,
@@ -128,6 +161,12 @@ function mergeServerTask(existing: TaskRecord, serverTask: TaskRecord): TaskReco
     serverImageUrls: { ...(serverTask.serverImageUrls || {}), ...(existing.serverImageUrls || {}) },
     serverThumbnailUrls: { ...(serverTask.serverThumbnailUrls || {}), ...(existing.serverThumbnailUrls || {}) },
     params: existing.params ?? serverTask.params,
+    actualParams: existing.actualParams ?? serverTask.actualParams,
+    actualParamsByImage: { ...(serverTask.actualParamsByImage || {}), ...(existing.actualParamsByImage || {}) },
+    revisedPromptByImage: { ...(serverTask.revisedPromptByImage || {}), ...(existing.revisedPromptByImage || {}) },
+    outputImageDimensions: { ...(serverTask.outputImageDimensions || {}), ...(existing.outputImageDimensions || {}) },
+    rawImageUrls: existing.rawImageUrls?.length ? existing.rawImageUrls : serverTask.rawImageUrls,
+    operation: existing.operation ?? serverTask.operation,
     isFavorite: existing.isFavorite ?? serverTask.isFavorite,
     status: serverTask.status,
     error: serverTask.error,
@@ -165,6 +204,10 @@ export async function loadServerHistory(webVersion: string, existingTasks: TaskR
       existing.outputImages.push(imageId)
       existing.serverImageUrls = { ...(existing.serverImageUrls || {}), ...(task.serverImageUrls || {}) }
       existing.serverThumbnailUrls = { ...(existing.serverThumbnailUrls || {}), ...(task.serverThumbnailUrls || {}) }
+      existing.actualParams = existing.actualParams ?? task.actualParams
+      existing.actualParamsByImage = { ...(existing.actualParamsByImage || {}), ...(task.actualParamsByImage || {}) }
+      existing.outputImageDimensions = { ...(existing.outputImageDimensions || {}), ...(task.outputImageDimensions || {}) }
+      existing.rawImageUrls = [...(existing.rawImageUrls || []), ...(task.rawImageUrls || [])]
       if (!existing.inputImageIds.length && task.inputImageIds.length) {
         existing.inputImageIds = task.inputImageIds
         existing.maskImageId = existing.maskImageId ?? task.maskImageId

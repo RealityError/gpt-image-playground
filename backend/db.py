@@ -75,6 +75,7 @@ def init_db() -> None:
                 error_message TEXT,
                 operation TEXT NOT NULL DEFAULT 'generate',
                 request_params_json TEXT,
+                response_params_json TEXT,
                 input_image_count INTEGER NOT NULL DEFAULT 0,
                 mask_used INTEGER NOT NULL DEFAULT 0,
                 deleted_at TEXT,
@@ -186,6 +187,7 @@ def init_db() -> None:
         ensure_column(connection, "generation_requests", "owner_id", "TEXT NOT NULL DEFAULT ''")
         ensure_column(connection, "generation_requests", "operation", "TEXT NOT NULL DEFAULT 'generate'")
         ensure_column(connection, "generation_requests", "request_params_json", "TEXT")
+        ensure_column(connection, "generation_requests", "response_params_json", "TEXT")
         ensure_column(connection, "generation_requests", "input_image_count", "INTEGER NOT NULL DEFAULT 0")
         ensure_column(connection, "generation_requests", "mask_used", "INTEGER NOT NULL DEFAULT 0")
         ensure_column(connection, "generation_requests", "deleted_at", "TEXT")
@@ -251,15 +253,16 @@ def log_generation_finished(
     completed_at: str,
     elapsed_seconds: float,
     images: list[dict[str, Any]],
+    response_params_json: str | None = None,
 ) -> None:
     with get_connection() as connection:
         connection.execute(
             """
             UPDATE generation_requests
-            SET completed_at = ?, status = 'success', elapsed_seconds = ?, image_count = ?
+            SET completed_at = ?, status = 'success', elapsed_seconds = ?, image_count = ?, response_params_json = ?
             WHERE job_id = ?
             """,
-            (completed_at, elapsed_seconds, len(images), job_id),
+            (completed_at, elapsed_seconds, len(images), response_params_json, job_id),
         )
         connection.executemany(
             """
@@ -394,6 +397,8 @@ def list_history_images(owner_type: str, owner_id: str, offset: int, limit: int)
                 gr.operation,
                 gr.elapsed_seconds,
                 gr.prompt,
+                gr.request_params_json,
+                gr.response_params_json,
                 gr.owner_type,
                 gr.owner_id,
                 gr.input_image_count,
@@ -779,6 +784,7 @@ def list_admin_jobs(
                 gr.error_message,
                 gr.operation,
                 gr.request_params_json,
+                gr.response_params_json,
                 gr.input_image_count,
                 gr.mask_used,
                 gr.deleted_at,
@@ -828,6 +834,7 @@ def get_admin_job_detail(job_id: str) -> dict[str, Any] | None:
                 gr.error_message,
                 gr.operation,
                 gr.request_params_json,
+                gr.response_params_json,
                 gr.input_image_count,
                 gr.mask_used,
                 gr.deleted_at,
@@ -897,6 +904,7 @@ def get_owner_job_detail(job_id: str, owner_type: str, owner_id: str) -> dict[st
                 error_message,
                 operation,
                 request_params_json,
+                response_params_json,
                 input_image_count,
                 mask_used,
                 deleted_at,

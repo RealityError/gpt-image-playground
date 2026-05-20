@@ -17,6 +17,8 @@ export interface TaskParams {
   n: number
 }
 
+export type ActualTaskParams = Partial<TaskParams> & Record<string, unknown>
+
 export const DEFAULT_PARAMS: TaskParams = {
   size: 'auto',
   quality: 'auto',
@@ -47,11 +49,17 @@ export interface TaskRecord {
   prompt: string
   params: TaskParams
   /** API 返回的实际生效参数，用于标记与请求值不一致的情况 */
-  actualParams?: Partial<TaskParams>
+  actualParams?: ActualTaskParams
   /** 输出图片对应的实际生效参数，key 为 outputImages 中的图片 id */
-  actualParamsByImage?: Record<string, Partial<TaskParams>>
+  actualParamsByImage?: Record<string, ActualTaskParams>
   /** 输出图片对应的 API 改写提示词，key 为 outputImages 中的图片 id */
   revisedPromptByImage?: Record<string, string>
+  /** 输出图片对应的实际像素尺寸，key 为 outputImages 中的图片 id */
+  outputImageDimensions?: Record<string, { width: number; height: number }>
+  operation?: 'generate' | 'reference' | 'edit' | string
+  /** 可恢复任务标记，兼容旧记录 */
+  falRecoverable?: boolean
+  customRecoverable?: boolean
   /** 输入图片的 image store id 列表 */
   inputImageIds: string[]
   maskTargetImageId?: string | null

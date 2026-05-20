@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { TaskParams, TaskRecord } from '../types'
+import type { ActualTaskParams, TaskParams, TaskRecord } from '../types'
 import ViewportTooltip from '../components/ViewportTooltip'
 
 type ParamKey = keyof TaskParams
@@ -8,16 +8,19 @@ interface ParamValueProps {
   task: TaskRecord
   paramKey: ParamKey
   className?: string
-  actualParams?: Partial<TaskParams>
+  actualParams?: ActualTaskParams
+  actualDisplayValue?: string
+  actualTooltip?: string
 }
 
 interface ActualValueBadgeProps {
   value: string
   className?: string
   variant?: 'highlight' | 'normal'
+  tooltip?: string
 }
 
-export function ActualValueBadge({ value, className = '', variant = 'highlight' }: ActualValueBadgeProps) {
+export function ActualValueBadge({ value, className = '', variant = 'highlight', tooltip = 'API 实际响应值' }: ActualValueBadgeProps) {
   const [tooltipVisible, setTooltipVisible] = useState(false)
   const touchTimerRef = useRef<number | null>(null)
   const colorClass = variant === 'normal'
@@ -57,17 +60,22 @@ export function ActualValueBadge({ value, className = '', variant = 'highlight' 
     >
       {value}
       <ViewportTooltip visible={tooltipVisible} className="whitespace-nowrap">
-        API 实际响应值
+        {tooltip}
       </ViewportTooltip>
     </span>
   )
 }
 
-export function getParamDisplay(task: TaskRecord, paramKey: ParamKey, actualParams = task.actualParams) {
+export function getParamDisplay(
+  task: TaskRecord,
+  paramKey: ParamKey,
+  actualParams = task.actualParams,
+  actualDisplayValue?: string,
+) {
   const requestedValue = task.params[paramKey]
   const actualValue = actualParams?.[paramKey]
-  const hasActualValue = actualValue !== undefined && actualValue !== null
-  const displayValue = hasActualValue ? actualValue : requestedValue
+  const hasActualValue = (actualValue !== undefined && actualValue !== null) || Boolean(actualDisplayValue)
+  const displayValue = actualDisplayValue ?? (hasActualValue ? actualValue : requestedValue)
   const isMismatch =
     hasActualValue &&
     requestedValue !== 'auto' &&
@@ -95,8 +103,20 @@ export function ParamValue({ task, paramKey, className = '', actualParams }: Par
   )
 }
 
-export function DetailParamValue({ task, paramKey, className = '', actualParams }: ParamValueProps) {
-  const { displayValue, isMismatch, requestedValue, isAutoResolved } = getParamDisplay(task, paramKey, actualParams)
+export function DetailParamValue({
+  task,
+  paramKey,
+  className = '',
+  actualParams,
+  actualDisplayValue,
+  actualTooltip,
+}: ParamValueProps) {
+  const { displayValue, isMismatch, requestedValue, isAutoResolved } = getParamDisplay(
+    task,
+    paramKey,
+    actualParams,
+    actualDisplayValue,
+  )
 
   if (!isMismatch) {
     if (isAutoResolved) {
@@ -104,7 +124,7 @@ export function DetailParamValue({ task, paramKey, className = '', actualParams 
         <span className={`inline-flex items-center gap-1 ${className}`}>
           <span className="text-gray-700 dark:text-gray-300">{requestedValue}</span>
           <span className="text-gray-300 dark:text-gray-600">|</span>
-          <ActualValueBadge value={displayValue} variant="normal" className="rounded px-1 py-0.5" />
+          <ActualValueBadge value={displayValue} tooltip={actualTooltip} variant="normal" className="rounded px-1 py-0.5" />
         </span>
       )
     }
@@ -115,7 +135,7 @@ export function DetailParamValue({ task, paramKey, className = '', actualParams 
     <span className={`inline-flex items-center gap-1 ${className}`}>
       <span className="text-gray-700 dark:text-gray-300">{requestedValue}</span>
       <span className="text-gray-300 dark:text-gray-600">|</span>
-      <ActualValueBadge value={displayValue} className="rounded px-1 py-0.5" />
+      <ActualValueBadge value={displayValue} tooltip={actualTooltip} className="rounded px-1 py-0.5" />
     </span>
   )
 }

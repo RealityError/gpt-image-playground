@@ -1,5 +1,6 @@
-import { useEffect, useState, useMemo, useRef } from 'react'
+import { useEffect, useState, useMemo, useRef, type ReactNode } from 'react'
 import { useStore, getCachedImage, ensureImageCached, reuseConfig, editOutputs, removeTask, retryTask } from '../store'
+import type { ActualTaskParams } from '../types'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
 import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
 import { useTooltip } from '../hooks/useTooltip'
@@ -11,6 +12,48 @@ import { dismissAllTooltips } from '../lib/tooltipDismiss'
 import { CloseIcon, CodeIcon, CopyIcon, EditIcon, LinkIcon, TrashIcon } from './icons'
 
 import ViewportTooltip from './ViewportTooltip'
+
+const PARAM_LABELS: Record<string, string> = {
+  size: '尺寸',
+  quality: '质量',
+  n: '数量',
+  background: '背景',
+  output_format: '格式',
+  created: '创建',
+  usage: '用量',
+  model: '模型',
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value))
+}
+
+function formatInfoValue(key: string, value: unknown): string {
+  if (value == null) return ''
+  if (key === 'created' && typeof value === 'number' && Number.isFinite(value)) {
+    return new Date(value * 1000).toLocaleString('zh-CN')
+  }
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    return String(value)
+  }
+  try {
+    return JSON.stringify(value)
+  } catch {
+    return String(value)
+  }
+}
+
+function getInfoEntries(params?: ActualTaskParams | Record<string, unknown>) {
+  if (!params || !isPlainRecord(params)) return []
+  return Object.entries(params)
+    .filter(([, value]) => value !== undefined && value !== null && value !== '')
+    .map(([key, value]) => ({
+      key,
+      label: PARAM_LABELS[key] ?? key,
+      value: formatInfoValue(key, value),
+    }))
+    .filter((entry) => entry.value.length > 0)
+}
 
 export default function DetailModal() {
   const tasks = useStore((s) => s.tasks)
@@ -64,11 +107,11 @@ export default function DetailModal() {
   }, [detailTaskId])
 
   useEffect(() => {
-    if (task?.status !== 'running' && !(task?.status === 'error' && (false || false))) return
+    if (task?.status !== 'running' && !(task?.status === 'error' && (task.falRecoverable || task.customRecoverable))) return
     const id = window.setInterval(() => setNow(Date.now()), 1000)
     setNow(Date.now())
     return () => window.clearInterval(id)
-  }, [task?.status])
+  }, [task?.customRecoverable, task?.falRecoverable, task?.status])
 
   // 加载所有相关图片
   useEffect(() => {
@@ -178,10 +221,57 @@ export default function DetailModal() {
   const outputLen = task.outputImages?.length || 0
   const currentImageRatio = currentOutputImageId ? imageRatios[currentOutputImageId] : ''
   const currentImageSize = currentOutputImageId ? imageSizes[currentOutputImageId] : ''
-  const currentActualParams = undefined as Partial<import('../types').TaskParams> | undefined
-  const isFalReconnecting = false
-  const isCustomReconnecting = false
-  const rawImageUrls: string[] = []
+  const currentActualParams = currentOutputImageId
+    ? task.actualParamsByImage?.[currentOutputImageId] ?? task.actualParams
+    : task.actualParams
+  const savedCurrentDimensions = currentOutputImageId ? task.outputImageDimensions?.[currentOutputImageId] : undefined
+  const actualCurrentSize = savedCurrentDimensions
+    ? `${savedCurrentDimensions.width}×${savedCurrentDimensions.height}`
+    : currentImageSize
+  const detailSizeValue = task.params.size === 'auto' && actualCurrentSize ? actualCurrentSize : undefined
+  const operationKind = task.maskImageId || task.operation === 'edit'
+    ? 'edit'
+    : task.inputImageIds.length > 0 || task.operation === 'reference'
+    ? 'reference'
+    : 'generate'
+  const operationLabel = operationKind === 'edit'
+    ? '局部重绘'
+    : operationKind === 'reference'
+    ? '参考图生图'
+    : '文生图'
+  const operationRoute = operationKind === 'edit'
+    ? '/web/edit'
+    : operationKind === 'reference'
+    ? '/web/image'
+    : '/web/generate'
+  const operationToneClass = operationKind === 'edit'
+    ? 'bg-blue-50 text-blue-600 dark:bg-blue-500/10 dark:text-blue-400'
+    : operationKind === 'reference'
+    ? 'bg-emerald-50 text-emerald-600 dark:bg-emerald-500/10 dark:text-emerald-400'
+    : 'bg-gray-100 text-gray-600 dark:bg-white/[0.04] dark:text-gray-300'
+  const currentRevisedPrompt = currentOutputImageId ? task.revisedPromptByImage?.[currentOutputImageId] : undefined
+  const currentRawImageUrl = currentOutputImageId
+    ? task.serverImageUrls?.[currentOutputImageId] ?? task.rawImageUrls?.[imageIndex]
+    : undefined
+  const jobId = task.serverJobId || task.id
+  const requestParamEntries = getInfoEntries(task.params as unknown as Record<string, unknown>)
+  const actualParamEntries = getInfoEntries(currentActualParams)
+  const hasActualParams = actualParamEntries.length > 0
+  const rawResponseText = task.rawResponsePayload || JSON.stringify({
+    jobId,
+    operation: operationKind,
+    route: operationRoute,
+    prompt: task.prompt,
+    requestParams: task.params,
+    actualParams: currentActualParams ?? null,
+    outputSize: actualCurrentSize || null,
+    revisedPrompt: currentRevisedPrompt ?? null,
+    imageUrl: currentRawImageUrl ?? null,
+  }, null, 2)
+  const isFalReconnecting = task.status === 'error' && Boolean(task.falRecoverable)
+  const isCustomReconnecting = task.status === 'error' && Boolean(task.customRecoverable)
+  const isReconnecting = isFalReconnecting || isCustomReconnecting
+  const rawImageUrls = task.rawImageUrls ?? []
 
   const formatTime = (ts: number | null) => {
     if (!ts) return ''
@@ -201,6 +291,28 @@ export default function DetailModal() {
     const ss = String(seconds % 60).padStart(2, '0')
     return `${mm}:${ss}`
   }
+
+  const renderInfoRow = (label: string, value: ReactNode) => (
+    <div className="flex gap-3 py-2">
+      <span className="w-16 shrink-0 text-gray-400 dark:text-gray-500">{label}</span>
+      <div className="min-w-0 flex-1 text-gray-700 dark:text-gray-300">{value}</div>
+    </div>
+  )
+
+  const renderParamChips = (entries: ReturnType<typeof getInfoEntries>) => (
+    <div className="flex min-w-0 flex-wrap gap-1.5">
+      {entries.map((entry) => (
+        <span
+          key={entry.key}
+          className="inline-flex max-w-full items-center gap-1 rounded-md bg-gray-100 px-1.5 py-0.5 dark:bg-white/[0.04]"
+          title={`${entry.label}: ${entry.value}`}
+        >
+          <span className="shrink-0 text-gray-400 dark:text-gray-500">{entry.label}</span>
+          <span className="min-w-0 truncate font-medium text-gray-700 dark:text-gray-300">{entry.value}</span>
+        </span>
+      ))}
+    </div>
+  )
 
   const handleReuse = () => {
     reuseConfig(task)
@@ -400,7 +512,7 @@ export default function DetailModal() {
               </button>
             </>
           )}
-          {(task.status === 'running' || isFalReconnecting) && (
+          {(task.status === 'running' || isReconnecting) && (
             <>
               <div className="absolute left-4 top-4 flex items-center gap-1 bg-black/50 text-white text-xs px-2 py-0.5 rounded backdrop-blur-sm font-mono">
                 <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -416,7 +528,7 @@ export default function DetailModal() {
               )}
             </>
           )}
-          {task.status === 'error' && isFalReconnecting && (
+          {task.status === 'error' && isReconnecting && (
             <div className="w-full max-w-md px-4 text-center">
               <svg className="w-10 h-10 text-yellow-400 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
@@ -424,7 +536,7 @@ export default function DetailModal() {
               <p className="text-sm font-medium text-yellow-500">重连中</p>
             </div>
           )}
-          {task.status === 'error' && !isFalReconnecting && (
+          {task.status === 'error' && !isReconnecting && (
             <div className="w-full max-w-md px-4 text-center">
               <svg className="w-10 h-10 text-red-400 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
@@ -544,12 +656,12 @@ export default function DetailModal() {
               <div className="mb-4">
                 <div className="flex items-center gap-1.5 mb-2">
                   <h3 className="text-xs font-medium text-gray-400 dark:text-gray-500 uppercase tracking-wider">
-                    参考图
+                    {maskTargetId ? '输入图' : '参考图'}
                   </h3>
                   <button
                     onClick={handleCopyInputImage}
                     className="p-1 rounded text-gray-400 hover:bg-gray-100 dark:text-gray-500 dark:hover:bg-white/[0.06] transition"
-                    title="复制参考图"
+                    title={maskTargetId ? '复制第 1 张输入图' : '复制参考图'}
                   >
                     <CopyIcon className="h-4 w-4" />
                   </button>
@@ -574,9 +686,11 @@ export default function DetailModal() {
                               alt=""
                             />
                           )}
-                          {isMaskTarget && (
-                            <span className="absolute left-1 top-1 rounded bg-blue-500/90 px-1.5 py-0.5 text-[8px] leading-none text-white font-bold tracking-wider backdrop-blur-sm z-10 pointer-events-none">
-                              MASK
+                          {(maskTargetId || allInputImageIds.length > 0) && (
+                            <span className={`absolute left-1 top-1 rounded px-1.5 py-0.5 text-[8px] leading-none text-white font-bold tracking-wider backdrop-blur-sm z-10 pointer-events-none ${
+                              isMaskTarget ? 'bg-blue-500/90' : 'bg-black/55'
+                            }`}>
+                              {isMaskTarget ? '主图' : '参考'}
                             </span>
                           )}
                         </div>
@@ -595,12 +709,73 @@ export default function DetailModal() {
               <div className="bg-gray-50 dark:bg-white/[0.03] rounded-lg px-3 py-2">
                 <span className="text-gray-400 dark:text-gray-500">尺寸</span>
                 <br />
-                <DetailParamValue task={task} paramKey="size" className="font-medium" actualParams={currentActualParams} />
+                <DetailParamValue
+                  task={task}
+                  paramKey="size"
+                  className="font-medium"
+                  actualParams={currentActualParams}
+                  actualDisplayValue={detailSizeValue}
+                  actualTooltip={detailSizeValue ? '输出图片实际像素尺寸' : undefined}
+                />
               </div>
               <div className="bg-gray-50 dark:bg-white/[0.03] rounded-lg px-3 py-2">
                 <span className="text-gray-400 dark:text-gray-500">质量</span>
                 <br />
                 <DetailParamValue task={task} paramKey="quality" className="font-medium" actualParams={currentActualParams} />
+              </div>
+            </div>
+
+            {/* 生成信息 */}
+            <div className="mb-4">
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <h3 className="text-xs font-medium text-gray-400 dark:text-gray-500 uppercase tracking-wider">
+                  生成信息
+                </h3>
+                <div className="relative">
+                  <button
+                    type="button"
+                    {...viewRawResponseTooltip.handlers}
+                    onClick={(e) => {
+                      viewRawResponseTooltip.handlers.onClick()
+                      dismissAllTooltips()
+                      setShowRawResponseModal(true)
+                    }}
+                    className="inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-[11px] text-gray-400 transition hover:bg-gray-100 hover:text-gray-600 dark:text-gray-500 dark:hover:bg-white/[0.06] dark:hover:text-gray-300"
+                  >
+                    <CodeIcon className="h-3.5 w-3.5" />
+                    JSON
+                  </button>
+                  <ViewportTooltip visible={viewRawResponseTooltip.visible} className="whitespace-nowrap">
+                    查看完整生成信息
+                  </ViewportTooltip>
+                </div>
+              </div>
+              <div className="divide-y divide-gray-100 rounded-lg border border-gray-100 px-3 text-xs dark:divide-white/[0.06] dark:border-white/[0.06]">
+                {renderInfoRow('模式', (
+                  <span className={`inline-flex rounded-md px-1.5 py-0.5 font-medium ${operationToneClass}`}>
+                    {operationLabel}
+                  </span>
+                ))}
+                {renderInfoRow('接口', (
+                  <span className="font-mono text-gray-600 dark:text-gray-300">{operationRoute}</span>
+                ))}
+                {renderInfoRow('Job', (
+                  <span className="font-mono text-[11px] text-gray-600 dark:text-gray-300">{jobId}</span>
+                ))}
+                {actualCurrentSize && renderInfoRow('输出尺寸', (
+                  <span className="font-mono text-gray-600 dark:text-gray-300">{actualCurrentSize}</span>
+                ))}
+                {renderInfoRow('请求参数', renderParamChips(requestParamEntries))}
+                {renderInfoRow('API响应', hasActualParams ? (
+                  renderParamChips(actualParamEntries)
+                ) : (
+                  <span className="text-gray-400 dark:text-gray-500">旧记录未保存 API 实际响应参数</span>
+                ))}
+                {currentRevisedPrompt && renderInfoRow('改写提示', (
+                  <span className="line-clamp-3 whitespace-pre-wrap leading-5 text-gray-600 dark:text-gray-300">
+                    {currentRevisedPrompt}
+                  </span>
+                ))}
               </div>
             </div>
 
@@ -720,6 +895,55 @@ export default function DetailModal() {
                   </div>
                 ))}
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showRawResponseModal && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm sm:p-6"
+          onPointerDown={(e) => {
+            rawResponseBackdropPointerDownRef.current = e.target === e.currentTarget
+          }}
+          onClick={(e) => {
+            e.stopPropagation()
+            if (rawResponseBackdropPointerDownRef.current && e.target === e.currentTarget) setShowRawResponseModal(false)
+            rawResponseBackdropPointerDownRef.current = false
+          }}
+        >
+          <div ref={rawResponseModalRef} className="flex w-full max-w-2xl max-h-[90vh] flex-col overflow-hidden rounded-2xl bg-white shadow-xl dark:bg-[#1c1c1e]" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between border-b border-gray-100 px-5 py-4 dark:border-white/[0.08] shrink-0">
+              <h3 className="text-base font-semibold text-gray-900 dark:text-white">完整生成信息</h3>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={async () => {
+                    try {
+                      await copyTextToClipboard(rawResponseText)
+                      showToast('复制成功', 'success')
+                    } catch (err) {
+                      showToast(getClipboardFailureMessage('复制失败', err), 'error')
+                    }
+                  }}
+                  className="flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg bg-gray-50 dark:bg-white/[0.04] text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-white/[0.08] transition-colors text-xs font-medium"
+                >
+                  <CopyIcon className="w-3.5 h-3.5" />
+                  复制
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowRawResponseModal(false)}
+                  className="rounded-full p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-500 dark:hover:bg-white/[0.08] dark:hover:text-gray-300 transition-colors"
+                >
+                  <CloseIcon className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+            <div className="flex-1 min-h-0 overflow-y-auto bg-gray-950 p-4 overscroll-contain">
+              <pre className="whitespace-pre-wrap break-words text-xs leading-5 text-gray-100 select-text">
+                {rawResponseText}
+              </pre>
             </div>
           </div>
         </div>

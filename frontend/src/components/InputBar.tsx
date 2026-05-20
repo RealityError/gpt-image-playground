@@ -467,6 +467,48 @@ export default function InputBar() {
   const referenceImages = maskTargetImage
     ? inputImages.filter((img) => img.id !== maskTargetImage.id)
     : inputImages
+  const inputMode = maskDraft && maskTargetImage
+    ? 'edit'
+    : inputImages.length > 0
+    ? 'reference'
+    : 'generate'
+  const modeLabel = inputMode === 'edit'
+    ? '局部重绘'
+    : inputMode === 'reference'
+    ? '参考图生图'
+    : '文生图'
+  const modeRoute = inputMode === 'edit'
+    ? '/web/edit'
+    : inputMode === 'reference'
+    ? '/web/image'
+    : '/web/generate'
+  const modeDotClass = inputMode === 'edit'
+    ? 'bg-blue-500'
+    : inputMode === 'reference'
+    ? 'bg-emerald-500'
+    : 'bg-gray-400'
+  const modeTextClass = inputMode === 'edit'
+    ? 'text-blue-600 dark:text-blue-400'
+    : inputMode === 'reference'
+    ? 'text-emerald-600 dark:text-emerald-400'
+    : 'text-gray-600 dark:text-gray-300'
+  const modeHint = inputMode === 'edit'
+    ? referenceImages.length > 0
+      ? `遮罩应用于第 1 张，其余 ${referenceImages.length} 张仅作参考`
+      : '遮罩应用于第 1 张'
+    : inputMode === 'reference'
+    ? `${inputImages.length} 张参考图`
+    : '无参考图'
+  const promptPlaceholder = inputMode === 'edit'
+    ? '描述遮罩区域怎么改，可输入 @图2 引用参考图...'
+    : inputMode === 'reference'
+    ? '描述新图，可输入 @ 指定当前参考图...'
+    : '描述你想生成的图片...'
+  const submitLabel = inputMode === 'edit'
+    ? '局部重绘'
+    : inputMode === 'reference'
+    ? '参考图生图'
+    : '生成图像'
   const visiblePrompt = stripImageMentionMarkers(prompt)
   const atImageQuery = isCursorInSelectedImageMention(prompt, cursorPos)
     ? null
@@ -1071,7 +1113,15 @@ export default function InputBar() {
   const renderImageThumb = (img: (typeof inputImages)[number], idx: number) => {
     const isMaskTarget = maskDraft?.targetImageId === img.id
     const canEdit = !maskTargetImage || isMaskTarget
-    const imageHintText = isMaskTarget ? '遮罩图必须为第一张图' : ''
+    const imageHintText = isMaskTarget
+      ? '遮罩主图固定在第 1 张，其余图片仅作参考'
+      : inputMode === 'edit'
+      ? '这张图仅作参考，不会被遮罩直接修改'
+      : ''
+    const thumbRoleLabel = isMaskTarget ? '主图' : '参考'
+    const thumbRoleClass = isMaskTarget
+      ? 'bg-blue-500/90 text-white'
+      : 'bg-black/55 text-white'
     const displaySrc = isMaskTarget && maskPreviewUrl ? maskPreviewUrl : img.dataUrl
     const isImageDragging = imageDragIndex === idx
     const isLast = idx === inputImages.length - 1
@@ -1180,7 +1230,7 @@ export default function InputBar() {
       <div
         key={img.id}
         data-input-image-index={idx}
-        className={`relative group inline-block h-[52px] w-[52px] shrink-0 self-start transition-opacity ${isImageDragging ? 'opacity-40' : ''}`}
+        className={`relative group inline-block h-12 w-12 shrink-0 self-start transition-opacity ${isImageDragging ? 'opacity-40' : ''}`}
         style={{ touchAction: isMaskTarget ? 'auto' : 'none' }}
         draggable={!isMobile}
         onMouseLeave={hideImageHint}
@@ -1218,7 +1268,7 @@ export default function InputBar() {
           <div className="absolute -right-[5px] top-0 bottom-0 w-[2px] bg-blue-500 rounded-full z-40 shadow-sm pointer-events-none" />
         )}
         <div
-          className={`relative w-[52px] h-[52px] rounded-xl overflow-hidden shadow-sm cursor-grab active:cursor-grabbing select-none ${
+          className={`relative h-12 w-12 overflow-hidden rounded-xl shadow-sm cursor-grab active:cursor-grabbing select-none ${
             isMaskTarget
               ? 'border-2 border-blue-500'
               : 'border border-gray-200 dark:border-white/[0.08]'
@@ -1245,9 +1295,9 @@ export default function InputBar() {
               />
             </div>
           )}
-          {isMaskTarget && (
-            <span className="absolute left-1 top-1 rounded bg-blue-500/90 px-1.5 py-0.5 text-[8px] leading-none text-white font-bold tracking-wider backdrop-blur-sm z-10 pointer-events-none">
-              MASK
+          {inputMode !== 'generate' && (
+            <span className={`absolute left-1 top-1 rounded px-1.5 py-0.5 text-[8px] leading-none font-bold tracking-wider backdrop-blur-sm z-10 pointer-events-none ${thumbRoleClass}`}>
+              {thumbRoleLabel}
             </span>
           )}
           <span className="absolute bottom-1 left-1 flex h-4 w-4 items-center justify-center rounded-full bg-black/55 text-[9px] font-semibold text-white backdrop-blur-sm z-10 pointer-events-none">
@@ -1296,7 +1346,7 @@ export default function InputBar() {
           action: () => clearInputImages(),
         })
       }
-      className="w-[52px] h-[52px] rounded-xl border border-dashed border-gray-300 dark:border-white/[0.08] flex flex-col items-center justify-center gap-0.5 text-gray-400 dark:text-gray-500 hover:text-red-500 hover:border-red-300 hover:bg-red-50/50 dark:hover:bg-red-950/30 transition-all cursor-pointer flex-shrink-0"
+      className="h-12 w-12 rounded-xl border border-dashed border-gray-300 dark:border-white/[0.08] flex flex-col items-center justify-center gap-0.5 text-gray-400 dark:text-gray-500 hover:text-red-500 hover:border-red-300 hover:bg-red-50/50 dark:hover:bg-red-950/30 transition-all cursor-pointer flex-shrink-0"
       title={maskTargetImage ? '清空遮罩主图、参考图和遮罩' : '清空全部参考图'}
     >
       <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1309,13 +1359,13 @@ export default function InputBar() {
   const renderImageThumbs = () => {
     return (
       <div ref={imagesRef}>
-        <div className="grid grid-cols-[repeat(auto-fill,52px)] justify-between gap-x-2 gap-y-3 mb-3">
+        <div className="grid grid-cols-[repeat(auto-fill,48px)] justify-between gap-x-2 gap-y-2 mb-2">
           {inputImages.map((img, idx) => renderImageThumb(img, idx))}
           {renderClearAllButton()}
         </div>
         {touchDragPreview?.src && createPortal(
           <div
-            className="fixed z-[140] h-[52px] w-[52px] overflow-hidden rounded-xl shadow-xl pointer-events-none opacity-90"
+            className="fixed z-[140] h-12 w-12 overflow-hidden rounded-xl shadow-xl pointer-events-none opacity-90"
             style={{ left: touchDragPreview.x, top: touchDragPreview.y, transform: 'translate(-50%, -50%)' }}
           >
             <img src={touchDragPreview.src} className="h-full w-full object-cover" alt="" />
@@ -1330,7 +1380,7 @@ export default function InputBar() {
   // 参数面板
   // ==========================================================================
   const baseControlClass =
-    'px-3 py-1.5 rounded-xl border border-gray-200/60 dark:border-white/[0.08] bg-white/50 dark:bg-white/[0.03] hover:bg-white dark:hover:bg-white/[0.06] focus:outline-none text-xs text-left transition-all duration-200 shadow-sm'
+    'h-8 px-3 rounded-lg border border-gray-200/60 dark:border-white/[0.08] bg-white/50 dark:bg-white/[0.03] hover:bg-white dark:hover:bg-white/[0.06] focus:outline-none text-xs text-left transition-all duration-200'
 
   const renderSizeDropdown = () => (
     <button
@@ -1421,15 +1471,15 @@ export default function InputBar() {
   const renderParams = (cols: string) => (
     <div className={`grid ${cols} gap-2 text-xs flex-1`}>
       <label className="relative flex flex-col gap-0.5">
-        <span className="text-gray-400 dark:text-gray-500 ml-1">尺寸</span>
+        <span className="ml-1 text-[11px] text-gray-400 dark:text-gray-500">尺寸</span>
         {renderSizeDropdown()}
       </label>
       <label className="relative flex flex-col gap-0.5">
-        <span className="text-gray-400 dark:text-gray-500 ml-1">质量</span>
+        <span className="ml-1 text-[11px] text-gray-400 dark:text-gray-500">质量</span>
         {renderQualityDropdown()}
       </label>
       <label className="relative flex flex-col gap-0.5">
-        <span className="text-gray-400 dark:text-gray-500 ml-1">数量</span>
+        <span className="ml-1 text-[11px] text-gray-400 dark:text-gray-500">数量</span>
         {renderNInput()}
       </label>
     </div>
@@ -1483,7 +1533,7 @@ export default function InputBar() {
         />
       )}
 
-      <div data-input-bar className="fixed bottom-4 sm:bottom-6 left-1/2 -translate-x-1/2 z-30 w-full max-w-4xl px-3 sm:px-4 transition-all duration-300">
+      <div data-input-bar className="fixed bottom-3 sm:bottom-5 left-1/2 -translate-x-1/2 z-30 w-full max-w-3xl px-3 sm:px-4 transition-all duration-300">
         {selectedTaskIds.length > 0 && (
           <div className="flex justify-center mb-3">
             <div className="bg-white/90 dark:bg-gray-800/90 backdrop-blur shadow-[0_8px_30px_rgb(0,0,0,0.12)] dark:shadow-lg rounded-full flex items-center p-1 border border-gray-200/50 dark:border-white/10 pointer-events-auto">
@@ -1536,7 +1586,7 @@ export default function InputBar() {
           </div>
         )}
 
-        <div ref={cardRef} className="bg-white/70 dark:bg-gray-900/70 backdrop-blur-2xl border border-white/50 dark:border-white/[0.08] shadow-[0_8px_30px_rgb(0,0,0,0.08)] dark:shadow-[0_8px_30px_rgb(0,0,0,0.3)] rounded-2xl sm:rounded-3xl p-3 sm:p-4 ring-1 ring-black/5 dark:ring-white/10">
+        <div ref={cardRef} className="rounded-2xl border border-gray-200/70 bg-white/85 p-3 shadow-[0_10px_40px_rgb(15,23,42,0.10)] ring-1 ring-black/5 backdrop-blur-2xl dark:border-white/[0.08] dark:bg-[#18181b]/85 dark:shadow-[0_10px_40px_rgb(0,0,0,0.35)] dark:ring-white/[0.06] sm:p-3">
           {/* 移动端拖动条 */}
           <div
             ref={handleRef}
@@ -1547,6 +1597,19 @@ export default function InputBar() {
           </div>
 
           {/* 输入图片行 */}
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 px-1 text-xs">
+            <div className="flex min-w-0 items-center gap-2">
+              <span className={`h-2 w-2 shrink-0 rounded-full ${modeDotClass}`} />
+              <span className={`shrink-0 font-medium ${modeTextClass}`}>{modeLabel}</span>
+              <span className="truncate rounded-md bg-gray-100 px-1.5 py-0.5 font-mono text-[11px] text-gray-500 dark:bg-white/[0.04] dark:text-gray-400">
+                {modeRoute}
+              </span>
+            </div>
+            <span className="min-w-0 truncate text-gray-400 dark:text-gray-500">
+              {modeHint}
+            </span>
+          </div>
+
           {inputImages.length > 0 && (
             isMobile ? (
               <>
@@ -1557,7 +1620,7 @@ export default function InputBar() {
                 </div>
                 {mobileCollapsed && (
                   <div className="text-xs text-gray-400 dark:text-gray-500 mb-2 ml-1">
-                    {maskDraft ? `1 张遮罩主图 · ${referenceImages.length} 张参考图` : `${inputImages.length} 张参考图`}
+                    {inputMode === 'edit' ? `1 张遮罩主图 · ${referenceImages.length} 张参考图` : `${inputImages.length} 张参考图`}
                   </div>
                 )}
               </>
@@ -1640,13 +1703,13 @@ export default function InputBar() {
 
                 syncMentionTagSelection(el)
               }}
-              data-placeholder="描述你想生成的图片，可输入 @ 指定当前参考图..."
-              className="min-h-[42px] w-full whitespace-pre-wrap break-words rounded-2xl border border-gray-200/60 bg-white/50 px-4 py-3 text-sm leading-relaxed shadow-sm outline-none transition-[border-color,box-shadow] duration-200 focus:ring-1 focus:ring-blue-300/40 empty:before:pointer-events-none empty:before:text-gray-400 empty:before:content-[attr(data-placeholder)] dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-100 dark:focus:ring-blue-500/30 dark:empty:before:text-gray-500"
+              data-placeholder={promptPlaceholder}
+              className="min-h-[40px] max-h-36 w-full overflow-y-auto whitespace-pre-wrap break-words rounded-xl border border-gray-200/60 bg-white/60 px-3.5 py-2.5 text-sm leading-relaxed outline-none transition-[border-color,box-shadow] duration-200 focus:ring-1 focus:ring-blue-300/40 empty:before:pointer-events-none empty:before:text-gray-400 empty:before:content-[attr(data-placeholder)] dark:border-white/[0.08] dark:bg-white/[0.04] dark:text-gray-100 dark:focus:ring-blue-500/30 dark:empty:before:text-gray-500"
             />
           </div>
 
           {/* 参数 + 按钮 */}
-          <div className="mt-3">
+          <div className="mt-2">
             {/* 桌面端 */}
             <div className="hidden sm:flex items-end justify-between gap-3">
               {renderParams('grid-cols-3')}
@@ -1660,14 +1723,14 @@ export default function InputBar() {
                   <ButtonTooltip visible={atImageLimit && attachHover} text={`参考图数量已达上限（${API_MAX_IMAGES} 张），无法继续添加`} />
                   <button
                     onClick={() => !atImageLimit && fileInputRef.current?.click()}
-                    className={`p-2.5 rounded-xl transition-all shadow-sm ${
+                    className={`p-2 rounded-xl transition-all ${
                       atImageLimit
                         ? 'bg-gray-200 dark:bg-white/[0.04] text-gray-300 dark:text-gray-500 cursor-not-allowed'
                         : 'bg-gray-200 dark:bg-white/[0.06] hover:bg-gray-300 dark:hover:bg-white/[0.1] text-gray-500 dark:text-gray-300 hover:shadow'
                     }`}
                     title={atImageLimit ? `已达上限 ${API_MAX_IMAGES} 张` : '添加参考图'}
                   >
-                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
                     </svg>
                   </button>
@@ -1681,10 +1744,10 @@ export default function InputBar() {
                   <button
                     onClick={() => submitTask()}
                     disabled={!canSubmit}
-                    className="p-2.5 rounded-xl transition-all shadow-sm hover:shadow bg-blue-500 text-white hover:bg-blue-600 disabled:bg-gray-300 dark:disabled:bg-white/[0.04] disabled:opacity-50 disabled:cursor-not-allowed"
-                    title={maskDraft ? '遮罩编辑 (Ctrl+Enter)' : '生成 (Ctrl+Enter)'}
+                    className="rounded-xl bg-blue-500 p-2 text-white transition-all hover:bg-blue-600 disabled:cursor-not-allowed disabled:bg-gray-300 disabled:opacity-50 dark:disabled:bg-white/[0.04]"
+                    title={`${submitLabel} (Ctrl+Enter)`}
                   >
-                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
                     </svg>
                   </button>
@@ -1736,7 +1799,7 @@ export default function InputBar() {
                     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
                     </svg>
-                    {maskDraft ? '遮罩编辑' : '生成图像'}
+                    {submitLabel}
                   </button>
                 </div>
               </div>

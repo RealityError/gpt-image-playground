@@ -1,4 +1,4 @@
-import type { TaskParams } from '../types'
+import type { ActualTaskParams, TaskParams } from '../types'
 
 export const MAX_MASK_EDIT_FILE_BYTES = 50 * 1024 * 1024
 export const MAX_IMAGE_INPUT_PAYLOAD_BYTES = 512 * 1024 * 1024
@@ -13,9 +13,10 @@ export interface CallApiOptions {
 
 export interface CallApiResult {
   images: string[]
-  actualParams?: Partial<TaskParams>
-  actualParamsList?: Array<Partial<TaskParams> | undefined>
+  actualParams?: ActualTaskParams
+  actualParamsList?: Array<ActualTaskParams | undefined>
   revisedPrompts?: Array<string | undefined>
+  imageDimensions?: Array<{ width: number; height: number } | undefined>
   rawImageUrls?: string[]
   jobId?: string
   imageUrls?: string[]

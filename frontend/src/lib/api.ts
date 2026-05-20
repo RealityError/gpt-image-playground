@@ -70,11 +70,19 @@ function appendCommonParams(target: Record<string, unknown> | FormData, opts: Ca
 async function resultToDataUrls(payload: any): Promise<CallApiResult> {
   const images = Array.isArray(payload.images) ? payload.images : []
   const urls = images.map((image: any) => image.url).filter((url: unknown): url is string => typeof url === 'string' && url.length > 0)
+  const dimensions = images.map((image: any) => {
+    const width = Number(image.width)
+    const height = Number(image.height)
+    return Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0
+      ? { width, height }
+      : undefined
+  })
   return {
     images: urls,
-    actualParams: payload.request_params || undefined,
-    actualParamsList: urls.map(() => payload.request_params || undefined),
+    actualParams: payload.actual_params || undefined,
+    actualParamsList: urls.map(() => payload.actual_params || undefined),
     revisedPrompts: images.map((image: any) => image.revised_prompt),
+    imageDimensions: dimensions,
     rawImageUrls: urls,
     jobId: payload.job_id,
     imageUrls: urls,
@@ -86,10 +94,11 @@ async function resultToDataUrls(payload: any): Promise<CallApiResult> {
 }
 
 export async function callImageApi(opts: CallApiOptions): Promise<CallApiResult> {
-  const isEdit = opts.inputImageDataUrls.length > 0
+  const hasInputImages = opts.inputImageDataUrls.length > 0
+  const isEdit = Boolean(opts.maskDataUrl)
   let response: Response
 
-  if (isEdit) {
+  if (hasInputImages) {
     const formData = new FormData()
     appendCommonParams(formData, opts)
     if (opts.maskDataUrl && (!opts.params.size || opts.params.size === 'auto') && opts.inputImageDataUrls[0]) {
@@ -111,7 +120,7 @@ export async function callImageApi(opts: CallApiOptions): Promise<CallApiResult>
     } else {
       assertImageInputPayloadSize(imageBlobs.reduce((sum, blob) => sum + blob.size, 0))
     }
-    response = await fetch('/web/edit', {
+    response = await fetch(isEdit ? '/web/edit' : '/web/image', {
       method: 'POST',
       credentials: 'same-origin',
       cache: 'no-store',

@@ -1,7 +1,7 @@
 import { create } from 'zustand'
-import { persist } from 'zustand/middleware'
+import { createJSONStorage, persist } from 'zustand/middleware'
 import { zipSync, unzipSync, strToU8, strFromU8 } from 'fflate'
-import type { AppSettings, TaskParams, InputImage, MaskDraft, TaskRecord, StoredImageThumbnail, ExportData } from './types'
+import type { ActualTaskParams, AppSettings, TaskParams, InputImage, MaskDraft, TaskRecord, StoredImageThumbnail, ExportData } from './types'
 import { DEFAULT_PARAMS } from './types'
 import {
   getAllTasks,
@@ -39,6 +39,37 @@ const DEFAULT_SETTINGS: AppSettings = {
 const IMAGE_CACHE_MAX = 8
 const THUMBNAIL_CACHE_MAX = 80
 const WEB_RECOVERY_INTERVAL = 2000
+const PERSIST_STORAGE_KEY = 'gpt-image-playground'
+
+const safeLocalStorage = {
+  getItem: (name: string) => localStorage.getItem(name),
+  removeItem: (name: string) => localStorage.removeItem(name),
+  setItem: (name: string, value: string) => {
+    try {
+      localStorage.setItem(name, value)
+    } catch (err) {
+      if (name !== PERSIST_STORAGE_KEY || !isQuotaExceededError(err)) throw err
+      const parsed = JSON.parse(value)
+      if (parsed?.state) {
+        delete parsed.state.inputImages
+        delete parsed.state.maskDraft
+        delete parsed.state.prompt
+        localStorage.setItem(name, JSON.stringify(parsed))
+        return
+      }
+      throw err
+    }
+  },
+}
+
+function isQuotaExceededError(err: unknown) {
+  return err instanceof DOMException && (
+    err.name === 'QuotaExceededError' ||
+    err.name === 'NS_ERROR_DOM_QUOTA_REACHED' ||
+    err.code === 22 ||
+    err.code === 1014
+  )
+}
 
 // ===== Image cache (LRU) =====
 
@@ -413,7 +444,8 @@ export const useStore = create<AppState>()(
       setServerStats: (s) => set((state) => ({ serverStats: { ...state.serverStats, ...s } })),
     }),
     {
-      name: 'gpt-image-playground',
+      name: PERSIST_STORAGE_KEY,
+      storage: createJSONStorage(() => safeLocalStorage),
       partialize: (state) => {
         const persisted: any = {
           settings: state.settings,
@@ -421,7 +453,8 @@ export const useStore = create<AppState>()(
         }
         if (state.settings.persistInputOnRestart) {
           persisted.prompt = state.prompt
-          persisted.inputImages = state.inputImages
+          persisted.inputImages = state.inputImages.map((img) => ({ id: img.id, dataUrl: '' }))
+          persisted.maskDraft = state.maskDraft
         }
         return persisted
       },
@@ -504,6 +537,22 @@ async function applyTaskResult(taskId: string, result: CallApiResult) {
   const elapsed = result.elapsedSeconds
     ? Math.round(result.elapsedSeconds * 1000)
     : finishedAt - task.createdAt
+  const actualParams = result.actualParams ?? result.actualParamsList?.find((params) => Boolean(params))
+  const actualParamsByImage = Object.fromEntries(
+    outputImageIds
+      .map((id, index) => [id, result.actualParamsList?.[index] ?? actualParams] as const)
+      .filter((entry): entry is readonly [string, ActualTaskParams] => Boolean(entry[1])),
+  )
+  const revisedPromptByImage = Object.fromEntries(
+    outputImageIds
+      .map((id, index) => [id, result.revisedPrompts?.[index]] as const)
+      .filter((entry): entry is readonly [string, string] => typeof entry[1] === 'string' && entry[1].length > 0),
+  )
+  const outputImageDimensions = Object.fromEntries(
+    outputImageIds
+      .map((id, index) => [id, result.imageDimensions?.[index]] as const)
+      .filter((entry): entry is readonly [string, { width: number; height: number }] => Boolean(entry[1])),
+  )
 
   await updateTaskInStore(taskId, {
     status: 'done',
@@ -512,6 +561,11 @@ async function applyTaskResult(taskId: string, result: CallApiResult) {
     serverJobId: jobId || undefined,
     serverImageUrls: Object.keys(serverImageUrls).length ? serverImageUrls : undefined,
     serverThumbnailUrls: Object.keys(serverThumbnailUrls).length ? serverThumbnailUrls : undefined,
+    actualParams,
+    actualParamsByImage: Object.keys(actualParamsByImage).length ? actualParamsByImage : undefined,
+    revisedPromptByImage: Object.keys(revisedPromptByImage).length ? revisedPromptByImage : undefined,
+    outputImageDimensions: Object.keys(outputImageDimensions).length ? outputImageDimensions : undefined,
+    rawImageUrls: result.rawImageUrls,
     finishedAt,
     elapsed,
   })
@@ -549,8 +603,20 @@ async function recoverWebTask(taskId: string) {
     if (payload.status === 'success') {
       const images = Array.isArray(payload.images) ? payload.images : []
       const urls = images.map((img: any) => img.url).filter((u: unknown): u is string => typeof u === 'string' && u.length > 0)
+      const dimensions = images.map((img: any) => {
+        const width = Number(img.width)
+        const height = Number(img.height)
+        return Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0
+          ? { width, height }
+          : undefined
+      })
       const result: CallApiResult = {
         images: urls,
+        actualParams: payload.actual_params || undefined,
+        actualParamsList: urls.map(() => payload.actual_params || undefined),
+        revisedPrompts: images.map((img: any) => img.revised_prompt),
+        imageDimensions: dimensions,
+        rawImageUrls: urls,
         jobId: task.serverJobId,
         imageUrls: urls,
         thumbnailUrls: images.map((img: any) => img.thumbnail_url).filter((u: unknown): u is string => typeof u === 'string' && u.length > 0),
@@ -599,9 +665,10 @@ export async function initStore(options?: { loadTasks?: boolean }) {
       const stored = await getImage(img.id)
       if (stored) validImages.push({ id: img.id, dataUrl: stored.dataUrl })
     }
-    if (validImages.length !== state.inputImages.length) {
-      useStore.setState({ inputImages: validImages })
-    }
+    const maskDraft = state.maskDraft && validImages.some((img) => img.id === state.maskDraft?.targetImageId)
+      ? state.maskDraft
+      : null
+    useStore.setState({ inputImages: validImages, maskDraft })
   }
 
   // Clean orphan images
@@ -686,6 +753,7 @@ export async function submitTask(options?: { allowFullMask?: boolean }) {
       id: genId(),
       prompt: prompt.trim(),
       params: { ...params, n: 1 },
+      operation: maskImageId ? 'edit' : inputImageIds.length > 0 ? 'reference' : 'generate',
       inputImageIds,
       maskTargetImageId,
       maskImageId,
@@ -731,6 +799,12 @@ export async function retryTask(task: TaskRecord) {
     serverJobId: undefined,
     serverImageUrls: undefined,
     serverThumbnailUrls: undefined,
+    actualParams: undefined,
+    actualParamsByImage: undefined,
+    revisedPromptByImage: undefined,
+    outputImageDimensions: undefined,
+    rawImageUrls: undefined,
+    rawResponsePayload: undefined,
   }
   await updateTaskInStore(task.id, resetPatch)
   executeTask(task.id)
@@ -1115,4 +1189,3 @@ export async function importData(file: File, options: ImportOptions = { importCo
     return false
   }
 }
-

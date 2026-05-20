@@ -830,6 +830,15 @@ def save_bytes(raw: bytes, filename: str) -> Path:
     return output_path
 
 
+def read_image_dimensions(source_path: Path) -> tuple[int, int] | None:
+    try:
+        with Image.open(source_path) as image:
+            image = ImageOps.exif_transpose(image)
+            return int(image.width), int(image.height)
+    except Exception:
+        return None
+
+
 def thumbnail_path_for(job_id: str, image_index: int) -> Path:
     return THUMBNAIL_DIR / f"{job_id}_{image_index}.webp"
 
@@ -926,7 +935,7 @@ def local_image_payload(
 ) -> dict[str, Any]:
     if not saved_path.exists():
         raise FileNotFoundError(str(saved_path))
-    return {
+    payload = {
         "index": index,
         "url": url,
         "saved_path": str(saved_path),
@@ -934,6 +943,10 @@ def local_image_payload(
         "source": source,
         "revised_prompt": getattr(image_item, "revised_prompt", None),
     }
+    dimensions = read_image_dimensions(saved_path)
+    if dimensions:
+        payload["width"], payload["height"] = dimensions
+    return payload
 
 
 def serialize_image(
@@ -1051,7 +1064,12 @@ def build_history_items(owner_type: str, owner_id: str, offset: int, limit: int)
             "filename": local_path.name,
             "size_bytes": row.get("size_bytes"),
             "prompt": row.get("prompt"),
+            "request_params": parse_request_params(row.get("request_params_json")),
+            "actual_params": parse_request_params(row.get("response_params_json")),
         }
+        dimensions = read_image_dimensions(local_path)
+        if dimensions:
+            item["width"], item["height"] = dimensions
         input_count = int(row.get("input_image_count") or 0)
         mask_used = bool(row.get("mask_used"))
         if input_count > 0:
@@ -1100,6 +1118,31 @@ def parse_request_params(raw_params: Any) -> dict[str, Any]:
     except json.JSONDecodeError:
         return {}
     return parsed if isinstance(parsed, dict) else {}
+
+
+def response_actual_params(response: Any, fallback_size: str | None = None) -> dict[str, Any]:
+    params: dict[str, Any] = {}
+    for key in ("size", "quality", "background", "output_format"):
+        value = getattr(response, key, None)
+        if value is not None:
+            params[key] = str(value)
+    if fallback_size and "size" not in params:
+        params["size"] = fallback_size
+    created = getattr(response, "created", None)
+    if created is not None:
+        params["created"] = created
+    usage = getattr(response, "usage", None)
+    if usage is not None:
+        try:
+            if hasattr(usage, "model_dump"):
+                params["usage"] = usage.model_dump(exclude_none=True)
+            elif hasattr(usage, "dict"):
+                params["usage"] = usage.dict(exclude_none=True)
+            else:
+                params["usage"] = dict(usage)
+        except Exception:
+            pass
+    return params
 
 
 def build_generate_params(payload: GenerateRequest) -> tuple[str, dict[str, Any]]:
@@ -1220,7 +1263,8 @@ def create_job(
 
     started_at = time.time()
     try:
-        if operation == "edit":
+        uses_image_inputs = operation in {"edit", "reference"}
+        if uses_image_inputs:
             image_paths = list(prepared_image_paths or [])
             mask_path = prepared_mask_path
             if cleanup_prepared_paths:
@@ -1286,18 +1330,20 @@ def create_job(
 
     output_format = clean_text(request_params.get("output_format"))
     response_items = list(response.data or [])
+    uses_image_inputs = operation in {"edit", "reference"}
     images = serialize_response_images(
         response_items,
         job_id,
         output_format,
         scope,
-        source_hashes if operation == "edit" and source_hashes else None,
+        source_hashes if uses_image_inputs and source_hashes else None,
     )
-    if operation == "edit" and not images:
+    if uses_image_inputs and not images:
         elapsed = round(time.time() - started_at, 2)
-        error_message = "Image edit failed: upstream returned no edited images."
+        operation_label = "edit" if operation == "edit" else "reference generation"
+        error_message = f"Image {operation_label} failed: upstream returned no new images."
         if response_items and source_hashes:
-            error_message = "Image edit failed: upstream returned only the uploaded source images."
+            error_message = f"Image {operation_label} failed: upstream returned only the uploaded source images."
         log_generation_failed(
             job_id=job_id,
             completed_at=now_iso(),
@@ -1305,6 +1351,11 @@ def create_job(
             error_message=error_message,
         )
         raise HTTPException(status_code=502, detail=error_message)
+
+    actual_size = None
+    if images and images[0].get("width") and images[0].get("height"):
+        actual_size = f"{images[0]['width']}x{images[0]['height']}"
+    actual_params = response_actual_params(response, actual_size)
 
     if is_job_deleted(job_id):
         remove_saved_paths([
@@ -1322,6 +1373,7 @@ def create_job(
         completed_at=completed_at,
         elapsed_seconds=elapsed,
         images=images,
+        response_params_json=json.dumps(actual_params, ensure_ascii=False) if actual_params else None,
     )
 
     return {
@@ -1331,6 +1383,7 @@ def create_job(
         "prompt": prompt,
         "model": str(request_params.get("model") or get_model_name()),
         "request_params": request_params,
+        "actual_params": actual_params,
         "elapsed_seconds": elapsed,
         "image_count": len(images),
         "scope": scope,
@@ -1349,6 +1402,7 @@ def serialize_owner_job(detail: dict[str, Any]) -> dict[str, Any]:
                 request_params = parsed
         except json.JSONDecodeError:
             request_params = {}
+    actual_params = parse_request_params(detail.get("response_params_json"))
 
     job_id = str(detail.get("job_id") or "")
     images: list[dict[str, Any]] = []
@@ -1363,6 +1417,7 @@ def serialize_owner_job(detail: dict[str, Any]) -> dict[str, Any]:
         if not saved_path or not Path(saved_path).exists():
             continue
         image_index = int(image.get("image_index") or 0)
+        dimensions = read_image_dimensions(Path(saved_path))
         images.append(
             {
                 "url": build_image_url("web", job_id, image_index),
@@ -1370,6 +1425,8 @@ def serialize_owner_job(detail: dict[str, Any]) -> dict[str, Any]:
                 "image_index": image_index,
                 "filename": Path(saved_path).name,
                 "size_bytes": image.get("size_bytes"),
+                "width": dimensions[0] if dimensions else None,
+                "height": dimensions[1] if dimensions else None,
                 "source": image.get("source"),
             }
         )
@@ -1382,6 +1439,7 @@ def serialize_owner_job(detail: dict[str, Any]) -> dict[str, Any]:
         "prompt": detail.get("prompt"),
         "model": detail.get("model"),
         "request_params": request_params,
+        "actual_params": actual_params,
         "elapsed_seconds": detail.get("elapsed_seconds"),
         "image_count": detail.get("image_count") or len(images),
         "scope": detail.get("scope"),
@@ -1406,6 +1464,8 @@ def serialize_public_api_job(result: dict[str, Any]) -> dict[str, Any]:
                 "url": build_image_url("api", job_id, image_index),
                 "thumbnail_url": build_api_thumbnail_url(job_id, image_index),
                 "size_bytes": image.get("size_bytes"),
+                "width": image.get("width"),
+                "height": image.get("height"),
                 "source": image.get("source"),
                 "revised_prompt": image.get("revised_prompt"),
             }
@@ -1420,6 +1480,7 @@ def serialize_public_api_job(result: dict[str, Any]) -> dict[str, Any]:
         "operation": result.get("operation"),
         "model": result.get("model"),
         "request_params": result.get("request_params") or {},
+        "actual_params": result.get("actual_params") or {},
         "elapsed_seconds": result.get("elapsed_seconds"),
         "image_count": len(images),
         "images": images,
@@ -1721,6 +1782,7 @@ def enqueue_web_job(
         "prompt": prompt,
         "model": str(request_params.get("model") or get_model_name()),
         "request_params": request_params,
+        "actual_params": {},
         "scope": "web",
         "request_ip": ip,
         "status": "running",
@@ -2123,6 +2185,7 @@ def web_job_status(request: Request, job_id: str) -> dict[str, Any]:
         "job_id": job_id,
         "status": memory_state.get("status") or "running",
         "error_message": memory_state.get("error_message") or "",
+        "actual_params": {},
         "images": [],
         "image_count": 0,
     }
@@ -2235,6 +2298,45 @@ async def web_edit(request: Request) -> dict[str, Any]:
         )
     except Exception:
         for path in prepared_image_paths + ([prepared_mask_path] if prepared_mask_path else []):
+            try:
+                path.unlink(missing_ok=True)
+            except Exception:
+                pass
+        raise
+
+
+@app.post("/web/image")
+async def web_image_reference(request: Request) -> dict[str, Any]:
+    session_id, ip, owner_type, owner_id = require_web_owner(request)
+    form = await request.form()
+    prompt, request_params, image_uploads, mask_upload = parse_edit_form(form)
+    if mask_upload is not None:
+        raise HTTPException(status_code=400, detail="Use /web/edit when a mask is provided.")
+    job_prefix = build_job_id()
+    prepared_image_paths: list[Path] = []
+    prepared_source_hashes: set[str] = set()
+    try:
+        for idx, upload in enumerate(image_uploads, start=1):
+            image_path, image_hash = materialize_upload(upload, f"{job_prefix}_image_{idx}")
+            prepared_image_paths.append(image_path)
+            prepared_source_hashes.add(image_hash)
+        return enqueue_web_job(
+            slot_key=owner_id,
+            prompt=prompt,
+            route="/web/image",
+            ip=ip,
+            user_agent=request.headers.get("user-agent", ""),
+            owner_type=owner_type,
+            owner_id=owner_id,
+            operation="reference",
+            request_params=request_params,
+            prepared_image_paths=prepared_image_paths,
+            prepared_source_hashes=prepared_source_hashes,
+            input_image_count=len(prepared_image_paths),
+            mask_used=False,
+        )
+    except Exception:
+        for path in prepared_image_paths:
             try:
                 path.unlink(missing_ok=True)
             except Exception:
@@ -2553,6 +2655,7 @@ def admin_job_detail(request: Request, job_id: str) -> dict[str, Any]:
             detail["request_params"] = request_params_json
     else:
         detail["request_params"] = {}
+    detail["actual_params"] = parse_request_params(detail.get("response_params_json"))
     detail["owner_hint"] = owner_hint(str(detail.get("owner_id") or "")) if detail.get("owner_id") else ""
     images = []
     for image in detail.get("images", []):

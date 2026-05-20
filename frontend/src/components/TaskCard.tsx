@@ -127,11 +127,11 @@ export default function TaskCard({
 
   // 定时更新运行中任务的计时
   useEffect(() => {
-    if (task.status !== 'running') return
+    if (task.status !== 'running' && !(task.status === 'error' && (task.falRecoverable || task.customRecoverable))) return
     const id = setInterval(() => setNow(Date.now()), 1000)
     setNow(Date.now())
     return () => clearInterval(id)
-  }, [task.status])
+  }, [task.customRecoverable, task.falRecoverable, task.status])
 
   // 加载缩略图
   useEffect(() => {
@@ -183,8 +183,9 @@ export default function TaskCard({
   })()
   const isSwipeReady = Math.abs(swipeOffset) >= 40
   const showSwipeAction = isSwipeReady || swipeActionActive
-  const isFalReconnecting = task.status === 'error' && false
-  const isCustomReconnecting = task.status === 'error' && false
+  const isFalReconnecting = task.status === 'error' && Boolean(task.falRecoverable)
+  const isCustomReconnecting = task.status === 'error' && Boolean(task.customRecoverable)
+  const isReconnecting = isFalReconnecting || isCustomReconnecting
   const showRunningTimer = task.status === 'running' || isFalReconnecting || isCustomReconnecting
   const swipeBgClass = showSwipeAction
     ? swipeStartedSelected
@@ -192,11 +193,34 @@ export default function TaskCard({
       : 'bg-blue-500'
     : 'bg-gray-200 dark:bg-gray-700'
 
-  const qualityDisplay = getParamDisplay(task, 'quality')
-  const showQuality = task.params.quality !== 'auto' || qualityDisplay.isMismatch
-
-  const sizeDisplay = getParamDisplay(task, 'size')
-  const showSize = task.params.size !== 'auto' || sizeDisplay.isMismatch
+  const coverImageId = task.outputImages?.[0]
+  const coverActualParams = coverImageId ? task.actualParamsByImage?.[coverImageId] ?? task.actualParams : task.actualParams
+  const qualityDisplay = getParamDisplay(task, 'quality', coverActualParams)
+  const sizeDisplay = getParamDisplay(task, 'size', coverActualParams)
+  const savedCoverDimensions = coverImageId ? task.outputImageDimensions?.[coverImageId] : undefined
+  const actualCoverSize = savedCoverDimensions
+    ? `${savedCoverDimensions.width}×${savedCoverDimensions.height}`
+    : coverSize
+  const resolvedSizeDisplay = task.params.size === 'auto' && actualCoverSize
+    ? actualCoverSize
+    : sizeDisplay.isMismatch || sizeDisplay.isAutoResolved
+    ? sizeDisplay.displayValue
+    : ''
+  const sizeBadgeTooltip = task.params.size === 'auto' && actualCoverSize
+    ? '输出图片实际像素尺寸'
+    : 'API 实际响应值'
+  const outputCountLabel = task.outputImages.length > 0 ? `${task.outputImages.length} 张` : `${task.params.n} 张`
+  const showOutputCount = task.outputImages.length > 1 || task.params.n > 1
+  const operationLabel = task.maskImageId || task.operation === 'edit'
+    ? '局部重绘'
+    : task.inputImageIds.length > 0 || task.operation === 'reference'
+    ? '参考图生图'
+    : '文生图'
+  const operationRoute = task.maskImageId || task.operation === 'edit'
+    ? '/web/edit'
+    : task.inputImageIds.length > 0 || task.operation === 'reference'
+    ? '/web/image'
+    : '/web/generate'
 
   return (
     <div className="relative rounded-xl">
@@ -218,7 +242,7 @@ export default function TaskCard({
       </div>
 
       <div
-        className={`relative bg-white dark:bg-gray-900 rounded-xl border overflow-hidden cursor-pointer duration-200 hover:shadow-lg dark:hover:bg-gray-800/80 ${
+        className={`relative bg-white/90 dark:bg-white/[0.045] rounded-xl border overflow-hidden cursor-pointer duration-200 hover:shadow-md dark:hover:bg-white/[0.07] ${
           !isSwiping ? 'transition-[box-shadow,border-color,background-color,transform]' : 'transition-[box-shadow,border-color,background-color]'
         } ${
           task.status === 'running'
@@ -251,9 +275,9 @@ export default function TaskCard({
           </svg>
         </div>
       )}
-      <div className="flex h-40">
+      <div className="flex h-44">
         {/* 左侧图片区域 */}
-        <div className="w-40 min-w-[10rem] h-full bg-gray-100 dark:bg-black/20 relative flex items-center justify-center overflow-hidden flex-shrink-0">
+        <div className="w-44 min-w-[11rem] h-full bg-gray-100 dark:bg-black/25 relative flex items-center justify-center overflow-hidden flex-shrink-0">
           {task.status === 'running' && (
             <div className="flex flex-col items-center gap-2">
               <svg
@@ -278,7 +302,7 @@ export default function TaskCard({
               <span className="text-xs text-gray-400 dark:text-gray-500">生成中...</span>
             </div>
           )}
-          {task.status === 'error' && isFalReconnecting && (
+          {task.status === 'error' && isReconnecting && (
             <div className="flex flex-col items-center gap-1 px-2">
               <svg
                 className="w-7 h-7 text-yellow-400"
@@ -298,7 +322,7 @@ export default function TaskCard({
               </span>
             </div>
           )}
-          {task.status === 'error' && !isFalReconnecting && (
+          {task.status === 'error' && !isReconnecting && (
             <div className="flex flex-col items-center gap-1 px-2">
               <svg
                 className="w-7 h-7 text-red-400"
@@ -372,37 +396,96 @@ export default function TaskCard({
         </div>
 
         {/* 右侧信息区域 */}
-        <div className="flex-1 p-3 flex flex-col min-w-0">
+        <div className="flex-1 p-3.5 flex flex-col min-w-0">
+          <div className="mb-2 flex items-center gap-2 text-[11px] text-gray-400 dark:text-gray-500">
+            <span className={`h-1.5 w-1.5 rounded-full ${
+              task.status === 'done'
+                ? 'bg-emerald-400'
+                : task.status === 'running'
+                ? 'bg-blue-400'
+                : isReconnecting
+                ? 'bg-yellow-400'
+                : 'bg-red-400'
+            }`} />
+            <span>
+              {task.status === 'done'
+                ? '已完成'
+                : task.status === 'running'
+                ? '生成中'
+                : isReconnecting
+                ? '重连中'
+                : '失败'}
+            </span>
+            <span className="font-mono">{duration}</span>
+          </div>
+          <div className="min-h-0 flex-1 overflow-hidden">
+            {task.status === 'error' && task.error ? (
+              <p className="line-clamp-3 text-xs leading-5 text-red-400 break-words">
+                {task.error}
+              </p>
+            ) : (
+              <p className="line-clamp-4 text-xs leading-5 text-gray-500 dark:text-gray-400 break-words">
+                {task.prompt || '无提示词'}
+              </p>
+            )}
+          </div>
           <div className="mt-auto flex flex-col gap-1.5">
             {/* 参数与信息：横向滚动 */}
-            <div 
+            <div
               data-tag-scroll-area
-              className="flex overflow-x-auto hide-scrollbar pt-0.5 gap-1.5 whitespace-nowrap mask-edge-r min-w-0 pr-2"
+              className="flex flex-wrap gap-1.5 pt-0.5 min-w-0"
               onTouchStart={(e) => e.stopPropagation()}
               onTouchMove={(e) => e.stopPropagation()}
               onTouchEnd={(e) => e.stopPropagation()}
               onTouchCancel={(e) => e.stopPropagation()}
             >
-              {/* Mask */}
-              {task.maskImageId && (
-                <span className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-blue-50 dark:bg-blue-500/10 text-blue-600 dark:text-blue-400 text-xs flex-shrink-0">
+              <span
+                className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-xs flex-shrink-0 ${
+                task.maskImageId || task.operation === 'edit'
+                  ? 'bg-blue-50 text-blue-600 dark:bg-blue-500/10 dark:text-blue-400'
+                  : task.inputImageIds.length > 0 || task.operation === 'reference'
+                  ? 'bg-emerald-50 text-emerald-600 dark:bg-emerald-500/10 dark:text-emerald-400'
+                  : 'bg-gray-100 text-gray-500 dark:bg-white/[0.04] dark:text-gray-400'
+                }`}
+                title={operationRoute}
+              >
+                {(task.maskImageId || task.operation === 'edit') && (
                   <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
                   </svg>
-                  局部重绘
-                </span>
-              )}
-              {/* Params: only show if not default or mismatch */}
-              {showQuality && (
+                )}
+                {operationLabel}
+              </span>
+              <span
+                className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-gray-100 dark:bg-white/[0.04] text-xs flex-shrink-0"
+                title={`请求质量：${qualityDisplay.requestedValue}${qualityDisplay.isMismatch || qualityDisplay.isAutoResolved ? `，API 回传：${qualityDisplay.displayValue}` : ''}`}
+              >
+                <span className="text-gray-400 dark:text-gray-500">质量</span>
+                <span className="text-gray-600 dark:text-gray-300">{qualityDisplay.requestedValue}</span>
+                {(qualityDisplay.isMismatch || qualityDisplay.isAutoResolved) && (
+                  <>
+                    <span className="text-gray-300 dark:text-gray-600">→</span>
+                    <ActualValueBadge value={qualityDisplay.displayValue} className="px-1 rounded-sm" />
+                  </>
+                )}
+              </span>
+              <span
+                className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-gray-100 dark:bg-white/[0.04] text-xs flex-shrink-0"
+                title={`请求尺寸：${sizeDisplay.requestedValue}${resolvedSizeDisplay ? `，实际：${resolvedSizeDisplay}` : ''}`}
+              >
+                <span className="text-gray-400 dark:text-gray-500">尺寸</span>
+                <span className="text-gray-600 dark:text-gray-300">{sizeDisplay.requestedValue}</span>
+                {resolvedSizeDisplay && (
+                  <>
+                    <span className="text-gray-300 dark:text-gray-600">→</span>
+                    <ActualValueBadge value={resolvedSizeDisplay} tooltip={sizeBadgeTooltip} className="px-1 rounded-sm" />
+                  </>
+                )}
+              </span>
+              {showOutputCount && (
                 <span className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-gray-100 dark:bg-white/[0.04] text-xs flex-shrink-0">
-                  <span className="text-gray-400 dark:text-gray-500">质量</span>
-                  {qualityDisplay.isMismatch ? <ActualValueBadge value={qualityDisplay.displayValue} className="px-1 rounded-sm" /> : <span className="text-gray-600 dark:text-gray-300">{qualityDisplay.displayValue}</span>}
-                </span>
-              )}
-              {showSize && (
-                <span className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-gray-100 dark:bg-white/[0.04] text-xs flex-shrink-0">
-                  <span className="text-gray-400 dark:text-gray-500">尺寸</span>
-                  {sizeDisplay.isMismatch ? <ActualValueBadge value={sizeDisplay.displayValue} className="px-1 rounded-sm" /> : <span className="text-gray-600 dark:text-gray-300">{sizeDisplay.displayValue}</span>}
+                  <span className="text-gray-400 dark:text-gray-500">输出</span>
+                  <span className="text-gray-600 dark:text-gray-300">{outputCountLabel}</span>
                 </span>
               )}
             </div>
@@ -411,10 +494,10 @@ export default function TaskCard({
               className="flex w-full items-center justify-between flex-shrink-0 mt-0.5 sm:w-auto sm:justify-end sm:gap-1"
               onClick={(e) => e.stopPropagation()}
             >
-              {((task.status === 'error' && !isFalReconnecting) || settings.alwaysShowRetryButton) && (
+              {((task.status === 'error' && !isReconnecting) || settings.alwaysShowRetryButton) && (
                 <button
                   onClick={() => retryTask(task)}
-                  className="p-1.5 rounded-md hover:bg-blue-50 dark:hover:bg-blue-950/30 text-gray-400 hover:text-blue-500 transition"
+                  className="p-1.5 rounded-md text-gray-400 opacity-70 transition hover:bg-blue-50 hover:text-blue-500 hover:opacity-100 dark:hover:bg-blue-950/30"
                   title="重试任务"
                 >
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -424,7 +507,7 @@ export default function TaskCard({
               )}
               <button
                 onClick={onReuse}
-                className="p-1.5 rounded-md hover:bg-blue-50 dark:hover:bg-blue-950/30 text-gray-400 hover:text-blue-500 transition"
+                className="p-1.5 rounded-md text-gray-400 opacity-70 transition hover:bg-blue-50 hover:text-blue-500 hover:opacity-100 dark:hover:bg-blue-950/30"
                 title="复用配置"
               >
                 <svg
@@ -443,7 +526,7 @@ export default function TaskCard({
               </button>
               <button
                 onClick={onEditOutputs}
-                className="p-1.5 rounded-md hover:bg-green-50 dark:hover:bg-green-950/30 text-gray-400 hover:text-green-500 transition disabled:opacity-30"
+                className="p-1.5 rounded-md text-gray-400 opacity-70 transition hover:bg-green-50 hover:text-green-500 hover:opacity-100 disabled:opacity-30 dark:hover:bg-green-950/30"
                 title="编辑输出"
                 disabled={!task.outputImages?.length}
               >
@@ -463,7 +546,7 @@ export default function TaskCard({
               </button>
               <button
                 onClick={onDelete}
-                className="p-1.5 rounded-md hover:bg-red-50 dark:hover:bg-red-950/30 text-gray-400 hover:text-red-500 transition"
+                className="p-1.5 rounded-md text-gray-400 opacity-70 transition hover:bg-red-50 hover:text-red-500 hover:opacity-100 dark:hover:bg-red-950/30"
                 title="删除记录"
               >
                 <svg
