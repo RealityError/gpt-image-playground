@@ -19,7 +19,7 @@ from urllib.parse import urlparse
 from dotenv import load_dotenv
 from fastapi import Body, FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
-from openai import OpenAI
+from openai import APIConnectionError, APIError, APITimeoutError, DefaultHttpxClient, OpenAI
 from PIL import Image, ImageOps
 from pydantic import BaseModel, Field
 from starlette.datastructures import FormData, UploadFile as StarletteUploadFile
@@ -493,12 +493,36 @@ def get_client() -> OpenAI:
     base_url = get_env("IMAGE_API_BASE_URL")
     kwargs: dict[str, Any] = {
         "api_key": api_key,
+        "http_client": DefaultHttpxClient(trust_env=False),
         "timeout": timeout,
         "max_retries": 0,
     }
     if base_url:
         kwargs["base_url"] = base_url
     return OpenAI(**kwargs)
+
+
+def describe_image_upstream_error(exc: Exception) -> str:
+    base_url = get_env("IMAGE_API_BASE_URL") or "https://api.openai.com/v1"
+    timeout = get_image_api_timeout()
+    if isinstance(exc, APITimeoutError):
+        return f"upstream request timed out after {timeout:g}s while connecting to {base_url}"
+    if isinstance(exc, APIConnectionError):
+        return f"upstream connection failed for {base_url}: {exc}. Check network/proxy/DNS and IMAGE_API_BASE_URL."
+    if isinstance(exc, APIError):
+        status_code = getattr(exc, "status_code", None)
+        response = getattr(exc, "response", None)
+        response_text = ""
+        if response is not None:
+            try:
+                response_text = response.text
+            except Exception:
+                response_text = ""
+        detail = response_text or str(exc)
+        if status_code:
+            return f"upstream API returned HTTP {status_code}: {detail}"
+        return f"upstream API error: {detail}"
+    return str(exc)
 
 
 def get_client_ip(request: Request) -> str:
@@ -1389,14 +1413,15 @@ def create_job(
         else:
             response = client.images.generate(**build_upstream_image_params(request_params))
     except Exception as exc:
+        error_message = describe_image_upstream_error(exc)
         elapsed = round(time.time() - started_at, 2)
         log_generation_failed(
             job_id=job_id,
             completed_at=now_iso(),
             elapsed_seconds=elapsed,
-            error_message=str(exc),
+            error_message=error_message,
         )
-        raise HTTPException(status_code=502, detail=f"Image {operation} failed: {exc}") from exc
+        raise HTTPException(status_code=502, detail=f"Image {operation} failed: {error_message}") from exc
     finally:
         for handle in open_handles:
             try:
